@@ -1,0 +1,153 @@
+[project]
+name = "openpi"
+version = "0.1.0"
+description = "GuidedVLA: Specifying Task-Relevant Factors via Plug-and-Play Action Attention Specialization"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    "augmax>=0.3.4",
+    "depth-anything-3",
+    "dm-tree>=0.1.8",
+    "einops>=0.8.0",
+    "equinox>=0.11.8",
+    "flatbuffers>=24.3.25",
+    "flax==0.10.2",
+    "fsspec[gcs]>=2024.6.0",
+    "gym-aloha>=0.1.1",
+    "imageio>=2.36.1",
+    "jax[cuda12]==0.5.3",
+    "jaxtyping==0.2.36",
+    "lerobot",
+    "ml_collections==1.0.0",
+    "numpy>=1.22.4,<2.0.0",
+    "numpydantic>=1.6.6",
+    "opencv-python>=4.10.0.84",
+    "openpi-client",
+    "orbax-checkpoint==0.11.13",
+    "pillow>=11.0.0",
+    "sentencepiece>=0.2.0",
+    "torch==2.7.1",
+    "tqdm-loggable>=0.2",
+    "typing-extensions>=4.12.2",
+    "tyro>=0.9.5",
+    "wandb>=0.19.1",
+    "filelock>=3.16.1",
+    "beartype==0.19.0",
+    "chex==0.1.90",
+    "treescope>=0.1.7",
+    "transformers==4.53.2",
+    "rich>=14.0.0",
+    "polars>=1.30.0",
+]
+
+
+[project.urls]
+Repository = "https://github.com/GuidedVLA/GuidedVLA"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+    "ruff>=0.8.6",
+    "pre-commit>=4.0.1",
+    "ipykernel>=6.29.5",
+    "ipywidgets>=8.1.5",
+    "matplotlib>=3.10.0",
+    "nvidia-ml-py>=12.0.0",
+]
+rlds = [
+    "dlimp",
+]
+
+[tool.uv]
+# Override gsplat to the published PyPI release so uv lock generation in CI
+# doesn't try to build the optional CUDA extension from a Git source checkout.
+override-dependencies = ["ml-dtypes==0.4.1", "tensorstore==0.1.74", "numpy>=1.22.4,<2.0.0", "gsplat==1.5.3"]
+no-build-isolation-package = ["flash-attn"]
+
+[tool.uv.extra-build-dependencies]
+flash-attn = [{ requirement = "torch", match-runtime = true }]
+gsplat = ["torch"]
+
+[tool.uv.sources]
+openpi-client = { workspace = true }
+depth-anything-3 = { workspace = true }
+lerobot = { git = "https://github.com/huggingface/lerobot", rev = "d9e74a9d374a8f26582ad326c699740a227b483c" }
+dlimp = { git = "https://github.com/kvablack/dlimp", rev = "ad72ce3a9b414db2185bc0b38461d4101a65477a" }
+
+[tool.uv.workspace]
+members = ["packages/*", "third_party/depth_anything"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["docker", "examples", "third_party", "src/openpi/models_pytorch/transformers_replace/*"]
+
+[tool.ruff.lint]
+# https://docs.astral.sh/ruff/rules/
+select = [
+    "B",
+    "C4",
+    "DTZ",
+    "E7",
+    "E9",
+    "F",
+    "FBT",
+    "FURB",
+    "I",
+    "ICN",
+    "ISC",
+    "LOG",
+    "N",
+    "PD",
+    "PERF",
+    "PIE",
+    "PLC",
+    "PLE",
+    "PLR1",
+    "PLR5",
+    "PLW",
+    "PT",
+    "Q",
+    "RET",
+    "RUF",
+    "SIM",
+    "SLF",
+    "T10",
+    "T20",
+    "UP",
+    "W",
+]
+ignore = [
+    "F722",   # Conflicts with array typing.
+    "T201",   # We use print statements.
+    "PD008",  # Lots of false positives.
+    "ISC001", # Disabling to support ruff format.
+    "LOG015", # Use logger.info.
+    "FBT002", # Bool argument
+]
+unfixable = [
+    "B905", # Fix defaults to strict=False, which is not what we want.
+]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+force-sort-within-sections = true
+single-line-exclusions = ["collections.abc", "typing", "typing_extensions"]
+known-third-party = ["wandb"]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/aloha_real/convert_aloha_data_to_lerobot.py" = ["PLC0415"]
+"src/openpi/models/pi0_config.py" = ["PLC0415"]
+"src/openpi/models_pytorch/pi0_pytorch.py" = ["PLC0415"]
+"src/openpi/policies/policy_config.py" = ["PLC0415"]
+"src/openpi/training/droid_rlds_dataset.py" = ["PLC0415"]
+"src/openpi/training/misc/roboarena_config.py" = ["PLC0415"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+markers = ["manual: should be run manually."]
+testpaths = ["src", "scripts", "packages"]

@@ -1,0 +1,99 @@
+cff-version: 1.2.0
+message: "If you use GuidedVLA, please cite the following work."
+title: "GuidedVLA: Specifying Task-Relevant Factors via Plug-and-Play Action Attention Specialization"
+type: software
+authors:
+  - family-names: Jia
+    given-names: Xiaosong
+  - family-names: Yang
+    given-names: Bowen
+  - family-names: Ge
+    given-names: Zuhao
+  - family-names: Nie
+    given-names: Xian
+  - family-names: Zhou
+    given-names: Yuchen
+  - family-names: Fan
+    given-names: Cunxin
+  - family-names: Li
+    given-names: Yufeng
+  - family-names: Chai
+    given-names: Yilin
+  - family-names: Jing
+    given-names: Chao
+  - family-names: Liang
+    given-names: Zijian
+  - family-names: Bu
+    given-names: Qingwen
+  - family-names: Cao
+    given-names: Haidong
+  - family-names: Wu
+    given-names: Chao
+  - family-names: Li
+    given-names: Qifeng
+  - family-names: Yang
+    given-names: Zhenjie
+  - family-names: Zhang
+    given-names: Chenhe
+  - family-names: Li
+    given-names: Hongyang
+  - family-names: Wu
+    given-names: Zuxuan
+  - family-names: Yan
+    given-names: Junchi
+  - family-names: Jiang
+    given-names: Yu-Gang
+conference:
+  name: "Robotics: Science and Systems"
+  location: "Sydney, Australia"
+year: 2026
+repository-code: "https://github.com/GuidedVLA/GuidedVLA"
+license: "Apache-2.0"
+preferred-citation:
+  type: conference-paper
+  title: "GuidedVLA: Specifying Task-Relevant Factors via Plug-and-Play Action Attention Specialization"
+  authors:
+    - family-names: Jia
+      given-names: Xiaosong
+    - family-names: Yang
+      given-names: Bowen
+    - family-names: Ge
+      given-names: Zuhao
+    - family-names: Nie
+      given-names: Xian
+    - family-names: Zhou
+      given-names: Yuchen
+    - family-names: Fan
+      given-names: Cunxin
+    - family-names: Li
+      given-names: Yufeng
+    - family-names: Chai
+      given-names: Yilin
+    - family-names: Jing
+      given-names: Chao
+    - family-names: Liang
+      given-names: Zijian
+    - family-names: Bu
+      given-names: Qingwen
+    - family-names: Cao
+      given-names: Haidong
+    - family-names: Wu
+      given-names: Chao
+    - family-names: Li
+      given-names: Qifeng
+    - family-names: Yang
+      given-names: Zhenjie
+    - family-names: Zhang
+      given-names: Chenhe
+    - family-names: Li
+      given-names: Hongyang
+    - family-names: Wu
+      given-names: Zuxuan
+    - family-names: Yan
+      given-names: Junchi
+    - family-names: Jiang
+      given-names: Yu-Gang
+  conference:
+    name: "Robotics: Science and Systems"
+    location: "Sydney, Australia"
+  year: 2026

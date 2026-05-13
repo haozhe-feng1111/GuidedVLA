@@ -1,0 +1,17 @@
+exclude: '^(third_party/|examples/)'
+
+repos:
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    # uv version.
+    rev: 0.9.9
+    hooks:
+      - id: uv-lock
+        args: [--preview-features, extra-build-dependencies]
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff version.
+    rev: v0.8.6
+    hooks:
+      # Run the linter.
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
