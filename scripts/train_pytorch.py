@@ -942,10 +942,10 @@ def build_model(
     if not resuming and getattr(train_model_config, "control_attention_enabled", False):
         model.enable_control_attention(**control_attention_kwargs)
 
+    # Respect the explicit training configuration.  Memory policy must be
+    # reproducible from the config/launcher and must not change implicitly
+    # when the number of DDP ranks changes.
     enable_gc = getattr(config, "use_gradient_checkpointing", False)
-    if not enable_gc and world_size >= 4:
-        logging.info(f"Auto-enabling gradient checkpointing for world_size={world_size}.")
-        enable_gc = True
     if hasattr(model, "gradient_checkpointing_enable"):
         if enable_gc:
             model.gradient_checkpointing_enable()
