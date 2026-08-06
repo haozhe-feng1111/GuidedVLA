@@ -15,11 +15,13 @@ set -Eeuo pipefail
 # Training precision is locked to the repository's paper-aligned path:
 # FP32 parameters/gradients/AdamW states with BF16 CUDA autocast.
 
-# Set GUIDEDVLA_BASE on each machine. The remaining locations preserve the
-# prepared Fudan layout but can be overridden individually when necessary.
-: "${GUIDEDVLA_BASE:?Set GUIDEDVLA_BASE to the prepared experiment root}"
-BASE="${GUIDEDVLA_BASE}"
-PROJECT_ROOT="${GUIDEDVLA_PROJECT_ROOT:-${BASE}/repo-libero-author-ga2-20260731}"
+# The launcher is self-contained when run from the prepared checkout:
+#   bash manifests/$(basename "${BASH_SOURCE[0]}")
+# It derives PROJECT_ROOT from its own location and BASE from the checkout's
+# parent. The GUIDEDVLA_* variables remain optional overrides for other layouts.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${GUIDEDVLA_PROJECT_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
+BASE="${GUIDEDVLA_BASE:-$(cd -- "${PROJECT_ROOT}/.." && pwd)}"
 RUNTIME="${GUIDEDVLA_RUNTIME:-${BASE}/runtime/pi0-conversion-env}"
 DATA_ROOT="${GUIDEDVLA_DATA_ROOT:-${BASE}/datasets/ybwowen-libero-477f7959}"
 PI0_BASE="${GUIDEDVLA_PI0_BASE:-${BASE}/models/pi0_base_pytorch_float32}"
