@@ -38,8 +38,10 @@ PREFLIGHT_ROOT="${LOG_ROOT}/preflight"
 LAUNCHER_PATH="${PROJECT_ROOT}/manifests/$(basename "${BASH_SOURCE[0]}")"
 
 AUTHOR_COMMIT="04be059e0d6bd448be5cb45fdbafc775f7eb5e38"
-# This commit removes the old world-size-based automatic GC override.
-FORMAL_CODE_COMMIT="5b33f645b2fe60c73f58b4100cb614d0a3b07daf"
+# This squash commit contains the exact training code used by this launcher.
+# Keep this separate from the pre-squash 5b33f64 commit: the latter is not an
+# ancestor of main after the formal setup was squashed into 80c8c72.
+FORMAL_CODE_COMMIT="80c8c7278c9615cb2a3c8f94075c7f4e0fcc30d0"
 DEPTH_ANYTHING_COMMIT="2c21ea849ceec7b469a3e62ea0c0e270afc3281a"
 SALAD_COMMIT="6aede13a3f6c25750bf7fde10209c06cb73060bb"
 
