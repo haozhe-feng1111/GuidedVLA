@@ -50,6 +50,8 @@ export WANDB_DIR="${WANDB_ROOT}"
 export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
+export TORCH_COMPILE=0
+export COMPILE_WARMUP_STEPS=0
 
 TRAIN_CMD=(
 "${RUNTIME}/bin/python" -m torch.distributed.run \

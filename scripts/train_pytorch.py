@@ -1012,6 +1012,10 @@ def build_model(
     # without cudagraphs, so it works identically on single-node and multi-node.
     # DDP uses static_graph=True so allreduce is pre-scheduled without needing
     # compile(DDP) allreduce fusion.
+    if os.environ.get("TORCH_COMPILE", "1").lower() in {"0", "false", "no", "off"}:
+        logging.info("Torch compile disabled by TORCH_COMPILE environment setting.")
+        return model, runtime_model_config, enable_gc
+
     logging.info("Torch compiling the model...")
     _inner = model.module if use_ddp else model
     if hasattr(_inner, "paligemma_with_expert"):
