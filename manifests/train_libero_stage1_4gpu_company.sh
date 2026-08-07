@@ -26,6 +26,20 @@ TOKENIZER_PATH="${BASE}/models/paligemma_tokenizer.model"
 RUN_ID="guidedvla_libero_stage1_4gpu_30k"
 OUTPUT_ROOT="${BASE}/outputs/${RUN_ID}"
 LOG_ROOT="${BASE}/logs/${RUN_ID}"
+CACHE_ROOT="${BASE}/cache/${RUN_ID}"
+
+export HF_HOME="${CACHE_ROOT}/hf"
+export HF_HUB_CACHE="${CACHE_ROOT}/hf-hub"
+export HUGGINGFACE_HUB_CACHE="${HF_HUB_CACHE}"
+export HF_DATASETS_CACHE="${CACHE_ROOT}/hf-datasets"
+export TRANSFORMERS_CACHE="${CACHE_ROOT}/transformers"
+export XDG_CACHE_HOME="${CACHE_ROOT}/xdg"
+export TORCHINDUCTOR_CACHE_DIR="${CACHE_ROOT}/torchinductor"
+export TRITON_CACHE_DIR="${CACHE_ROOT}/triton"
+export CUDA_CACHE_PATH="${CACHE_ROOT}/cuda"
+export TMPDIR="${CACHE_ROOT}/tmp"
+export TMP="${TMPDIR}"
+export TEMP="${TMPDIR}"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 export PYTHONPATH="${PROJECT_ROOT}/src:${PROJECT_ROOT}/packages/openpi-client/src:${PROJECT_ROOT}/third_party/depth_anything/src"
@@ -35,7 +49,36 @@ export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
 
-mkdir -p "${OUTPUT_ROOT}" "${LOG_ROOT}"
+mkdir -p \
+    "${OUTPUT_ROOT}" "${LOG_ROOT}" \
+    "${HF_HOME}" "${HF_HUB_CACHE}" "${HF_DATASETS_CACHE}" \
+    "${TRANSFORMERS_CACHE}" "${XDG_CACHE_HOME}" \
+    "${TORCHINDUCTOR_CACHE_DIR}" "${TRITON_CACHE_DIR}" \
+    "${CUDA_CACHE_PATH}" "${TMPDIR}"
+
+RUNTIME_LOG="${LOG_ROOT}/launcher_runtime.log"
+{
+    echo "timestamp=$(date -Is)"
+    echo "hostname=$(hostname)"
+    echo "project_root=${PROJECT_ROOT}"
+    echo "run_id=${RUN_ID}"
+    echo "cuda_visible_devices=${CUDA_VISIBLE_DEVICES:-unset}"
+    echo "cache_root=${CACHE_ROOT}"
+    echo "--- df -hT ---"
+    df -hT || true
+    echo "--- df -i ---"
+    df -i || true
+    echo "--- selected environment ---"
+    env | sort | grep -E '^(HOME|TMPDIR|TMP|TEMP|XDG_CACHE_HOME|HF_HOME|HF_HUB_CACHE|HUGGINGFACE_HUB_CACHE|HF_DATASETS_CACHE|TRANSFORMERS_CACHE|TORCHINDUCTOR_CACHE_DIR|TRITON_CACHE_DIR|CUDA_CACHE_PATH)=' || true
+    echo "--- selected local directories ---"
+    for path in "${TMPDIR:-}" /tmp /var/tmp \
+        "${HOME:-}/.cache" "${HOME:-}/.cache/huggingface" \
+        "${HOME:-}/.cache/torch" "${HOME:-}/.triton"; do
+        if [[ -n "${path}" && -e "${path}" ]]; then
+            du -x -sh "${path}" 2>&1 || true
+        fi
+    done
+} >"${RUNTIME_LOG}" 2>&1 || true
 
 "${RUNTIME}/bin/python" -m torch.distributed.run \
     --standalone \
