@@ -71,6 +71,7 @@ TRAIN_CMD=(
     --num-workers 2 \
     --pytorch-training-precision float32 \
     --use-gradient-checkpointing \
+    --ddp-find-unused-parameters \
     --wandb-enabled \
     --num-train-steps 30000 \
     --log-interval 10 \
