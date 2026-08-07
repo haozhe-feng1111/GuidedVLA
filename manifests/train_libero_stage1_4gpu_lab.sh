@@ -26,6 +26,21 @@ RUN_ID="guidedvla_libero_stage1_4gpu_30k"
 OUTPUT_ROOT="${BASE}/outputs/${RUN_ID}"
 LOG_ROOT="${BASE}/logs/${RUN_ID}"
 WANDB_ROOT="${BASE}/wandb/${RUN_ID}"
+CACHE_ROOT="${BASE}/cache/${RUN_ID}"
+TMP_ROOT="${BASE}/tmp"
+
+export HF_HOME="${CACHE_ROOT}/hf"
+export HF_HUB_CACHE="${CACHE_ROOT}/hf-hub"
+export HUGGINGFACE_HUB_CACHE="${HF_HUB_CACHE}"
+export HF_DATASETS_CACHE="${CACHE_ROOT}/hf-datasets"
+export TRANSFORMERS_CACHE="${CACHE_ROOT}/transformers"
+export XDG_CACHE_HOME="${CACHE_ROOT}/xdg"
+export TORCHINDUCTOR_CACHE_DIR="${CACHE_ROOT}/torchinductor"
+export TRITON_CACHE_DIR="${CACHE_ROOT}/triton"
+export CUDA_CACHE_PATH="${CACHE_ROOT}/cuda"
+export TMPDIR="${TMP_ROOT}"
+export TMP="${TMPDIR}"
+export TEMP="${TMPDIR}"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 export PYTHONPATH="${PROJECT_ROOT}/src:${PROJECT_ROOT}/packages/openpi-client/src:${PROJECT_ROOT}/third_party/depth_anything/src"
@@ -91,5 +106,10 @@ if [[ "${GUIDEDVLA_CHECK_ONLY:-0}" == "1" ]]; then
     exit 0
 fi
 
-mkdir -p "${OUTPUT_ROOT}" "${LOG_ROOT}" "${WANDB_ROOT}"
+mkdir -p \
+    "${OUTPUT_ROOT}" "${LOG_ROOT}" "${WANDB_ROOT}" \
+    "${HF_HOME}" "${HF_HUB_CACHE}" "${HF_DATASETS_CACHE}" \
+    "${TRANSFORMERS_CACHE}" "${XDG_CACHE_HOME}" \
+    "${TORCHINDUCTOR_CACHE_DIR}" "${TRITON_CACHE_DIR}" \
+    "${CUDA_CACHE_PATH}" "${TMP_ROOT}"
 "${TRAIN_CMD[@]}" 2>&1 | tee "${LOG_ROOT}/train.log"
