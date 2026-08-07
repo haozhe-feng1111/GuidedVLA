@@ -169,7 +169,12 @@ def attn_path_guided(
     # the final attention_probs shape, so we skip the zeros prealloc + scatter.
     distill_contiguous = distill_heads > 0 and len(distill_standard) == distill_heads
 
-    attn_output = torch.zeros_like(query)
+    output_dtype = (
+        torch.get_autocast_dtype(query.device.type)
+        if torch.is_autocast_enabled(query.device.type)
+        else query.dtype
+    )
+    attn_output = torch.zeros_like(query, dtype=output_dtype)
     attention_probs: torch.Tensor | None = None
 
     # Allocate supervised attention prob buffer (only if any distill heads exist
