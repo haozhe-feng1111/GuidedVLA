@@ -68,6 +68,7 @@ TRAIN_CMD=(
     --gradient-accumulation-steps 4 \
     --num-workers 2 \
     --pytorch-training-precision float32 \
+    --use-gradient-checkpointing \
     --wandb-enabled \
     --num-train-steps 30000 \
     --log-interval 10 \
