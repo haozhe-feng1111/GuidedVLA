@@ -25,11 +25,13 @@ TOKENIZER_PATH="${BASE}/models/paligemma_tokenizer.model"
 RUN_ID="guidedvla_libero_stage1_4gpu_30k"
 OUTPUT_ROOT="${BASE}/outputs/${RUN_ID}"
 LOG_ROOT="${BASE}/logs/${RUN_ID}"
+WANDB_ROOT="${BASE}/wandb/${RUN_ID}"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 export PYTHONPATH="${PROJECT_ROOT}/src:${PROJECT_ROOT}/packages/openpi-client/src:${PROJECT_ROOT}/third_party/depth_anything/src"
 export OPENPI_PALIGEMMA_TOKENIZER_PATH="${TOKENIZER_PATH}"
-export WANDB_MODE=disabled
+export WANDB_MODE=offline
+export WANDB_DIR="${WANDB_ROOT}"
 export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
@@ -51,7 +53,7 @@ TRAIN_CMD=(
     --gradient-accumulation-steps 4 \
     --num-workers 2 \
     --pytorch-training-precision float32 \
-    --no-wandb-enabled \
+    --wandb-enabled \
     --num-train-steps 30000 \
     --log-interval 10 \
     --save-interval 10000 \
@@ -89,5 +91,5 @@ if [[ "${GUIDEDVLA_CHECK_ONLY:-0}" == "1" ]]; then
     exit 0
 fi
 
-mkdir -p "${OUTPUT_ROOT}" "${LOG_ROOT}"
+mkdir -p "${OUTPUT_ROOT}" "${LOG_ROOT}" "${WANDB_ROOT}"
 "${TRAIN_CMD[@]}" 2>&1 | tee "${LOG_ROOT}/train.log"
