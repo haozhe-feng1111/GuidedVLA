@@ -104,28 +104,26 @@ def _load_classification_by_suite(args: Args, suite_names: List[str]) -> Dict[st
         with open(classification_path, encoding="utf-8") as f:
             classification = json.load(f)
     except Exception as e:
-        logging.warning(
-            f"Failed to load task classification from {classification_path}: {e}. Proceeding without category filter."
-        )
-        return {}
+        raise RuntimeError(f"Failed to load task classification from {classification_path}: {e}") from e
 
     requested_category = _normalize_category_name(args.category)
     classification_by_suite: Dict[str, TaskClassificationSelection] = {}
     for suite_name in suite_names:
         suite_entries = classification.get(suite_name)
         if suite_entries is None:
-            logging.warning(
-                "No task classification entries found for suite '%s' in %s. Category filter will be disabled for this suite.",
-                suite_name,
-                classification_path,
+            raise RuntimeError(
+                f"No task classification entries found for suite '{suite_name}' in {classification_path}."
             )
-            continue
 
         matched_entries = [
             entry
             for entry in suite_entries
             if _normalize_category_name(entry.get("category", "")) == requested_category
         ]
+        if not matched_entries:
+            raise RuntimeError(
+                f"Category '{args.category}' matched no tasks for suite '{suite_name}' in {classification_path}."
+            )
         task_ids_0based = {
             int(entry["id"]) - 1
             for entry in matched_entries

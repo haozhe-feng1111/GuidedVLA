@@ -645,10 +645,15 @@ def _build_server_cmd(args: Args, checkpoint_dir: str, port: int, mem_fraction: 
 
 def _build_client_cmd(args: Args, task: dict, port: int) -> tuple[list[str], pathlib.Path]:
     task_slug = task["slug"]
+    classification_path = (
+        pathlib.Path(args.libero_plus_path) / "libero" / "libero" / "benchmark" / "task_classification.json"
+    )
     if task["category"] is None:
-        result_json = pathlib.Path(args.results_base_dir) / f"{task_slug}.json"
+        result_json_base = pathlib.Path(args.results_base_dir) / f"{task_slug}.json"
+        result_json = result_json_base
     else:
         safe_category = task["category"].replace(" ", "_").replace("/", "_")
+        result_json_base = pathlib.Path(args.results_base_dir) / task["suite"] / "results.json"
         result_json = pathlib.Path(args.results_base_dir) / task["suite"] / f"results_{safe_category}.json"
 
     video_path = pathlib.Path(args.video_base_dir) / task_slug
@@ -667,7 +672,9 @@ def _build_client_cmd(args: Args, task: dict, port: int) -> tuple[list[str], pat
             "--args.video_out_path",
             str(video_path),
             "--args.results-json-path",
-            str(result_json),
+            str(result_json_base),
+            "--args.task-classification-path",
+            str(classification_path),
             "--args.port",
             str(port),
             "--args.host",
@@ -891,6 +898,9 @@ def _validate_args(args: Args) -> str:
     libero_plus_path = pathlib.Path(args.libero_plus_path)
     if not libero_plus_path.exists():
         raise FileNotFoundError(f"LIBERO-plus checkout was not found: {libero_plus_path}")
+    classification_path = libero_plus_path / "libero" / "libero" / "benchmark" / "task_classification.json"
+    if _parse_csv(args.categories) and not classification_path.is_file():
+        raise FileNotFoundError(f"LIBERO-plus task classification was not found: {classification_path}")
 
     if args.max_workers_per_gpu < 1:
         raise ValueError("max_workers_per_gpu must be >= 1")
