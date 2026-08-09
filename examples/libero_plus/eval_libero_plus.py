@@ -8,6 +8,7 @@ import queue
 import shlex
 import signal
 import subprocess
+import sys
 import threading
 import time
 from contextlib import suppress
@@ -17,6 +18,7 @@ from tqdm import tqdm
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 LOCAL_PATH_ARG_NAMES = (
+    "server_python",
     "client_python",
     "libero_plus_path",
     "results_base_dir",
@@ -30,6 +32,7 @@ class Args:
     checkpoint_dir: Optional[str] = None
     policy_config: str = "pi0_libero_object_depth_skill"
 
+    server_python: str = sys.executable
     client_python: str = str(REPO_ROOT / "examples" / "libero_plus" / ".venv" / "bin" / "python")
     libero_plus_path: str = str(REPO_ROOT / "third_party" / "LIBERO-plus")
 
@@ -173,7 +176,7 @@ def _absolute_path_preserve_symlinks(path_str: str) -> pathlib.Path:
 def _normalize_local_paths(args: Args) -> None:
     for field_name in LOCAL_PATH_ARG_NAMES:
         raw_path = getattr(args, field_name)
-        if field_name == "client_python":
+        if field_name in {"server_python", "client_python"}:
             normalized = _absolute_path_preserve_symlinks(raw_path)
         else:
             normalized = _resolve_path(raw_path)
@@ -611,10 +614,8 @@ def _start_logged_process(cmd: list[str], env: dict[str, str], log_path: pathlib
 
 def _build_server_cmd(args: Args, checkpoint_dir: str, port: int, mem_fraction: Optional[float]) -> list[str]:
     cmd = [
-        "uv",
-        "run",
-        "--no-sync",
-        "scripts/serve_policy.py",
+        args.server_python,
+        str(REPO_ROOT / "scripts" / "serve_policy.py"),
         "--env",
         "LIBERO",
         "--port",
@@ -862,6 +863,10 @@ def _validate_args(args: Args) -> str:
     client_python = pathlib.Path(args.client_python)
     if not client_python.exists():
         raise FileNotFoundError(f"LIBERO-plus client Python was not found: {client_python}")
+
+    server_python = pathlib.Path(args.server_python)
+    if not server_python.exists():
+        raise FileNotFoundError(f"Policy server Python was not found: {server_python}")
 
     libero_plus_path = pathlib.Path(args.libero_plus_path)
     if not libero_plus_path.exists():

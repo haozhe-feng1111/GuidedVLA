@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run from the GuidedVLA repository root in a job with exactly four visible GPUs:
+#   bash manifests/eval_libero_plus_stage2_4gpu_company.sh
+#
+# The scheduler owns CUDA_VISIBLE_DEVICES. This launcher never overwrites it or
+# assumes that allocated devices use host indices 0,1,2,3.
+
+if [[ ! -f examples/libero_plus/eval_libero_plus.py || ! -f scripts/serve_policy.py ]]; then
+    echo "Please run this command from the GuidedVLA repository root."
+    exit 1
+fi
+
+PROJECT_ROOT="$(pwd)"
+BASE="$(dirname "${PROJECT_ROOT}")"
+
+SERVER_PYTHON="${GUIDEDVLA_SERVER_PYTHON:-${BASE}/runtime/.venv/bin/python}"
+CLIENT_PYTHON="${GUIDEDVLA_CLIENT_PYTHON:-${BASE}/runtime/libero-plus-conda-py310/bin/python}"
+LIBERO_PLUS_PATH="${GUIDEDVLA_LIBERO_PLUS_PATH:-${BASE}/LIBERO-plus-4976dc3}"
+DEPTH_MODEL="${GUIDEDVLA_DEPTH_MODEL_PATH:-${BASE}/models/da3-small-e08cab65}"
+TOKENIZER_PATH="${GUIDEDVLA_TOKENIZER_PATH:-${BASE}/models/paligemma_tokenizer.model}"
+
+RUN_ID="${GUIDEDVLA_EVAL_RUN_ID:-libero_plus_stage2_4gpu}"
+CHECKPOINT="${GUIDEDVLA_CHECKPOINT:-${BASE}/outputs/guidedvla_libero_stage2_object_depth_skill_4gpu_30k/pi0_libero_object_depth_skill/guidedvla_libero_stage2_object_depth_skill_4gpu_30k/30000}"
+RESULTS_ROOT="${BASE}/eval_results/${RUN_ID}"
+LOG_ROOT="${BASE}/logs/${RUN_ID}"
+CACHE_ROOT="${BASE}/cache/${RUN_ID}"
+TMP_ROOT="${BASE}/tmp"
+
+export HF_HOME="${CACHE_ROOT}/hf"
+export HF_HUB_CACHE="${CACHE_ROOT}/hf-hub"
+export HUGGINGFACE_HUB_CACHE="${HF_HUB_CACHE}"
+export TRANSFORMERS_CACHE="${CACHE_ROOT}/transformers"
+export XDG_CACHE_HOME="${CACHE_ROOT}/xdg"
+export TORCHINDUCTOR_CACHE_DIR="${CACHE_ROOT}/torchinductor"
+export TRITON_CACHE_DIR="${CACHE_ROOT}/triton"
+export CUDA_CACHE_PATH="${CACHE_ROOT}/cuda"
+export TMPDIR="${TMP_ROOT}"
+export TMP="${TMPDIR}"
+export TEMP="${TMPDIR}"
+
+export PYTHONPATH="${PROJECT_ROOT}/src:${PROJECT_ROOT}/packages/openpi-client/src:${PROJECT_ROOT}/third_party/depth_anything/src:${LIBERO_PLUS_PATH}${PYTHONPATH:+:${PYTHONPATH}}"
+export OPENPI_PALIGEMMA_TOKENIZER_PATH="${TOKENIZER_PATH}"
+export OPENPI_DEPTH_MODEL_PATH="${DEPTH_MODEL}"
+export TORCH_COMPILE_DISABLE=1
+export TORCH_COMPILE=0
+export COMPILE_WARMUP_STEPS=0
+export TOKENIZERS_PARALLELISM=false
+export OMP_NUM_THREADS=1
+export PYTHONUNBUFFERED=1
+export MUJOCO_GL="${MUJOCO_GL:-osmesa}"
+export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
+
+[[ -x "${SERVER_PYTHON}" ]] || { echo "Missing policy server Python: ${SERVER_PYTHON}"; exit 1; }
+[[ -x "${CLIENT_PYTHON}" ]] || { echo "Missing LIBERO-plus client Python: ${CLIENT_PYTHON}"; exit 1; }
+[[ -f "${CHECKPOINT}/model.safetensors" ]] || { echo "Missing Stage 2 checkpoint: ${CHECKPOINT}"; exit 1; }
+[[ -f "${DEPTH_MODEL}/config.json" && -f "${DEPTH_MODEL}/model.safetensors" ]] || {
+    echo "Missing DA3-SMALL model files in: ${DEPTH_MODEL}"
+    exit 1
+}
+[[ -f "${TOKENIZER_PATH}" ]] || { echo "Missing tokenizer: ${TOKENIZER_PATH}"; exit 1; }
+[[ -f "${LIBERO_PLUS_PATH}/libero/libero/benchmark/task_classification.json" ]] || {
+    echo "Missing LIBERO-plus checkout or assets: ${LIBERO_PLUS_PATH}"
+    exit 1
+}
+command -v nvidia-smi >/dev/null || { echo "nvidia-smi is unavailable"; exit 1; }
+
+mapfile -t visible_gpu_ids < <(nvidia-smi --query-gpu=index --format=csv,noheader,nounits)
+[[ "${#visible_gpu_ids[@]}" -eq 4 ]] || {
+    echo "Expected exactly 4 scheduler-visible GPUs; nvidia-smi reports ${#visible_gpu_ids[@]}."
+    exit 1
+}
+
+EVAL_CMD=(
+    "${SERVER_PYTHON}" examples/libero_plus/eval_libero_plus.py
+    --checkpoint-dir "${CHECKPOINT}"
+    --policy-config pi0_libero_object_depth_skill
+    --server-python "${SERVER_PYTHON}"
+    --client-python "${CLIENT_PYTHON}"
+    --libero-plus-path "${LIBERO_PLUS_PATH}"
+    --max-workers-per-gpu 1
+    --estimated-worker-vram-gb 12
+    --vram-safe-threshold 0.90
+    --client-mujoco-gl "${MUJOCO_GL}"
+    --results-base-dir "${RESULTS_ROOT}"
+    --video-base-dir "${RESULTS_ROOT}/videos"
+    --log-dir "${LOG_ROOT}"
+    --start-port "${GUIDEDVLA_START_PORT:-18080}"
+    --num-trials-per-task "${GUIDEDVLA_NUM_TRIALS_PER_TASK:-1}"
+)
+
+mkdir -p \
+    "${RESULTS_ROOT}" "${LOG_ROOT}" \
+    "${HF_HOME}" "${HF_HUB_CACHE}" "${TRANSFORMERS_CACHE}" \
+    "${XDG_CACHE_HOME}" "${TORCHINDUCTOR_CACHE_DIR}" \
+    "${TRITON_CACHE_DIR}" "${CUDA_CACHE_PATH}" "${TMP_ROOT}"
+
+echo "Scheduler-visible GPUs: ${visible_gpu_ids[*]}"
+echo "Policy server Python: ${SERVER_PYTHON}"
+echo "LIBERO-plus client Python: ${CLIENT_PYTHON}"
+echo "Checkpoint: ${CHECKPOINT}"
+echo "DA3-SMALL: ${DEPTH_MODEL}"
+echo "MuJoCo backend: ${MUJOCO_GL}"
+
+if [[ "${GUIDEDVLA_CHECK_ONLY:-0}" == "1" ]]; then
+    printf '%q ' "${EVAL_CMD[@]}"
+    printf '\n'
+    exit 0
+fi
+
+exec "${EVAL_CMD[@]}"
