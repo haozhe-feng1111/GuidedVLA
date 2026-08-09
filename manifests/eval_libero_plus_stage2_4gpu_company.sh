@@ -18,6 +18,7 @@ BASE="$(dirname "${PROJECT_ROOT}")"
 SERVER_PYTHON="${GUIDEDVLA_SERVER_PYTHON:-${BASE}/runtime/.venv/bin/python}"
 CLIENT_PYTHON="${GUIDEDVLA_CLIENT_PYTHON:-${BASE}/runtime/libero-plus-conda-py310/bin/python}"
 LIBERO_PLUS_PATH="${GUIDEDVLA_LIBERO_PLUS_PATH:-${BASE}/LIBERO-plus-4976dc3}"
+LIBERO_CONFIG_PATH="${GUIDEDVLA_LIBERO_CONFIG_PATH:-${BASE}/runtime/libero-plus-config}"
 DEPTH_MODEL="${GUIDEDVLA_DEPTH_MODEL_PATH:-${BASE}/models/da3-small-e08cab65}"
 TOKENIZER_PATH="${GUIDEDVLA_TOKENIZER_PATH:-${BASE}/models/paligemma_tokenizer.model}"
 
@@ -79,6 +80,7 @@ EVAL_CMD=(
     --server-python "${SERVER_PYTHON}"
     --client-python "${CLIENT_PYTHON}"
     --libero-plus-path "${LIBERO_PLUS_PATH}"
+    --libero-config-path "${LIBERO_CONFIG_PATH}"
     --max-workers-per-gpu 1
     --estimated-worker-vram-gb 12
     --vram-safe-threshold 0.90
@@ -92,6 +94,7 @@ EVAL_CMD=(
 
 mkdir -p \
     "${RESULTS_ROOT}" "${LOG_ROOT}" \
+    "${LIBERO_CONFIG_PATH}" \
     "${HF_HOME}" "${HF_HUB_CACHE}" "${TRANSFORMERS_CACHE}" \
     "${XDG_CACHE_HOME}" "${TORCHINDUCTOR_CACHE_DIR}" \
     "${TRITON_CACHE_DIR}" "${CUDA_CACHE_PATH}" "${TMP_ROOT}"

@@ -21,6 +21,7 @@ LOCAL_PATH_ARG_NAMES = (
     "server_python",
     "client_python",
     "libero_plus_path",
+    "libero_config_path",
     "results_base_dir",
     "video_base_dir",
     "log_dir",
@@ -35,6 +36,7 @@ class Args:
     server_python: str = sys.executable
     client_python: str = str(REPO_ROOT / "examples" / "libero_plus" / ".venv" / "bin" / "python")
     libero_plus_path: str = str(REPO_ROOT / "third_party" / "LIBERO-plus")
+    libero_config_path: str = str(REPO_ROOT / "data" / "libero_plus" / "config")
 
     results_base_dir: str = str(REPO_ROOT / "data" / "libero_plus")
     video_base_dir: str = str(REPO_ROOT / "data" / "libero_plus")
@@ -88,6 +90,8 @@ process_lock = threading.Lock()
 shutdown_event = threading.Event()
 shutdown_in_progress = threading.Event()
 task_queue: "queue.Queue[dict]" = queue.Queue()
+task_failure_lock = threading.Lock()
+task_failures: list[str] = []
 
 port_lock = threading.Lock()
 current_port = 0
@@ -518,6 +522,7 @@ def _detect_virtual_env_root(python_path: pathlib.Path) -> Optional[pathlib.Path
 def _build_client_env(args: Args) -> dict[str, str]:
     client_env = os.environ.copy()
     client_env["PYTHONPATH"] = _compose_pythonpath(pathlib.Path(args.libero_plus_path), client_env.get("PYTHONPATH"))
+    client_env["LIBERO_CONFIG_PATH"] = args.libero_config_path
     client_env.pop("PYTHONHOME", None)
     venv_root = _detect_virtual_env_root(pathlib.Path(args.client_python))
     if venv_root is not None:
@@ -528,6 +533,31 @@ def _build_client_env(args: Args) -> dict[str, str]:
     if args.client_mujoco_gl:
         client_env["MUJOCO_GL"] = args.client_mujoco_gl
     return client_env
+
+
+def _prepare_libero_config(args: Args) -> pathlib.Path:
+    """Create LIBERO's config non-interactively before concurrent clients import it."""
+    config_dir = pathlib.Path(args.libero_config_path)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "config.yaml"
+
+    benchmark_root = pathlib.Path(args.libero_plus_path) / "libero" / "libero"
+    config = {
+        "benchmark_root": str(benchmark_root),
+        "bddl_files": str(benchmark_root / "bddl_files"),
+        "init_states": str(benchmark_root / "init_files"),
+        "datasets": str(pathlib.Path(args.libero_plus_path) / "libero" / "datasets"),
+        "assets": str(benchmark_root / "assets"),
+    }
+    tmp_file = config_dir / ".config.yaml.tmp"
+    tmp_file.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp_file, config_file)
+    return config_file
+
+
+def _record_task_failure(message: str) -> None:
+    with task_failure_lock:
+        task_failures.append(message)
 
 
 def _build_server_env(args: Args, gpu_id: int) -> dict[str, str]:
@@ -641,7 +671,8 @@ def _build_client_cmd(args: Args, task: dict, port: int) -> tuple[list[str], pat
     if task["category"] is None:
         result_json = pathlib.Path(args.results_base_dir) / f"{task_slug}.json"
     else:
-        result_json = pathlib.Path(args.results_base_dir) / task["suite"] / "results.json"
+        safe_category = task["category"].replace(" ", "_").replace("/", "_")
+        result_json = pathlib.Path(args.results_base_dir) / task["suite"] / f"results_{safe_category}.json"
 
     video_path = pathlib.Path(args.video_base_dir) / task_slug
     cmd = []
@@ -743,11 +774,22 @@ def run_worker_daemon(
             client_process: Optional[subprocess.Popen] = None
             try:
                 client_process = _start_logged_process(client_cmd, client_env, client_log_path)
+                timed_out = False
                 try:
                     client_process.wait(timeout=args.client_timeout_sec)
                 except subprocess.TimeoutExpired:
+                    timed_out = True
                     print(f"[Worker GPU {gpu_id}:{port}] Client timeout on {task_slug}; killing.")
                     _kill_process_tree(client_process)
+                    client_process.wait()
+                if timed_out:
+                    _record_task_failure(f"{task_slug}: timed out; log={client_log_path}")
+                elif client_process.returncode != 0:
+                    _record_task_failure(
+                        f"{task_slug}: client exited {client_process.returncode}; log={client_log_path}"
+                    )
+                elif not result_json.is_file():
+                    _record_task_failure(f"{task_slug}: missing result JSON {result_json}; log={client_log_path}")
                 # Verify the server still responds. If the client crashed in a
                 # way that took the server with it (rare but seen with MuJoCo
                 # OOM cascades), stop this worker so the monitor can respawn.
@@ -758,6 +800,7 @@ def run_worker_daemon(
                     break
             except Exception as exc:
                 print(f"[Worker GPU {gpu_id}:{port}] Client error on {task_slug}: {exc}")
+                _record_task_failure(f"{task_slug}: client exception {exc}; log={client_log_path}")
             finally:
                 if client_process is not None:
                     # Belt-and-suspenders: if still alive, kill its tree.
@@ -907,6 +950,7 @@ def _parse_cli_args() -> Args:
 def main(args: Args) -> None:
     global current_port  # noqa: PLW0603
     checkpoint_dir = _validate_args(args)
+    libero_config_file = _prepare_libero_config(args)
     client_summary = _run_client_preflight(args, _build_client_env(args))
     gpu_ids = _discover_gpu_ids(args.gpu_ids)
     current_port = args.start_port
@@ -919,6 +963,7 @@ def main(args: Args) -> None:
     print(f"Checkpoint: {checkpoint_dir}")
     print(f"GPU ids: {gpu_ids}")
     print(f"Task count: {len(all_tasks)}")
+    print(f"LIBERO config: {libero_config_file}")
     print(f"Task suites: {_parse_csv(args.task_suites)}")
     print(f"Categories: {_parse_csv(args.categories) or ['ALL']}")
     print(
@@ -957,7 +1002,13 @@ def main(args: Args) -> None:
     for proc in _snapshot_active_processes():
         _kill_process_tree(proc)
 
-    print("All benchmarks completed.")
+    with task_failure_lock:
+        failures = list(task_failures)
+    if failures:
+        details = "\n".join(f"  - {failure}" for failure in failures)
+        raise RuntimeError(f"{len(failures)} benchmark task(s) failed:\n{details}")
+
+    print("All benchmarks completed successfully.")
 
 
 if __name__ == "__main__":
