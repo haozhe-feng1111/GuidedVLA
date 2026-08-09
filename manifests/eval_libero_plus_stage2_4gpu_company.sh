@@ -19,6 +19,7 @@ SERVER_PYTHON="${GUIDEDVLA_SERVER_PYTHON:-${BASE}/runtime/.venv/bin/python}"
 CLIENT_PYTHON="${GUIDEDVLA_CLIENT_PYTHON:-${BASE}/runtime/libero-plus-conda-py310/bin/python}"
 LIBERO_PLUS_PATH="${GUIDEDVLA_LIBERO_PLUS_PATH:-${BASE}/LIBERO-plus-4976dc3}"
 COMPANY_LIBERO_CONFIG_PATH="${GUIDEDVLA_COMPANY_LIBERO_CONFIG_PATH:-${BASE}/runtime/libero-plus-config}"
+COMPANY_OSMESA_LIB_PATH="${GUIDEDVLA_COMPANY_OSMESA_LIB_PATH:-${BASE}/runtime/company-osmesa/lib}"
 DEPTH_MODEL="${GUIDEDVLA_DEPTH_MODEL_PATH:-${BASE}/models/da3-small-e08cab65}"
 TOKENIZER_PATH="${GUIDEDVLA_TOKENIZER_PATH:-${BASE}/models/paligemma_tokenizer.model}"
 
@@ -51,6 +52,7 @@ export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
 export LIBERO_CONFIG_PATH="${COMPANY_LIBERO_CONFIG_PATH}"
+export LD_LIBRARY_PATH="${COMPANY_OSMESA_LIB_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export MUJOCO_GL="${MUJOCO_GL:-osmesa}"
 export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
 
@@ -64,6 +66,10 @@ export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
 [[ -f "${TOKENIZER_PATH}" ]] || { echo "Missing tokenizer: ${TOKENIZER_PATH}"; exit 1; }
 [[ -f "${LIBERO_PLUS_PATH}/libero/libero/benchmark/task_classification.json" ]] || {
     echo "Missing LIBERO-plus checkout or assets: ${LIBERO_PLUS_PATH}"
+    exit 1
+}
+[[ -f "${COMPANY_OSMESA_LIB_PATH}/libOSMesa.so.8" ]] || {
+    echo "Missing company OSMesa runtime: ${COMPANY_OSMESA_LIB_PATH}"
     exit 1
 }
 command -v nvidia-smi >/dev/null || { echo "nvidia-smi is unavailable"; exit 1; }
@@ -114,6 +120,7 @@ echo "Scheduler-visible GPUs: ${visible_gpu_ids[*]}"
 echo "Policy server Python: ${SERVER_PYTHON}"
 echo "LIBERO-plus client Python: ${CLIENT_PYTHON}"
 echo "Company LIBERO config: ${COMPANY_LIBERO_CONFIG_FILE}"
+echo "Company OSMesa runtime: ${COMPANY_OSMESA_LIB_PATH}"
 echo "Checkpoint: ${CHECKPOINT}"
 echo "DA3-SMALL: ${DEPTH_MODEL}"
 echo "MuJoCo backend: ${MUJOCO_GL}"
