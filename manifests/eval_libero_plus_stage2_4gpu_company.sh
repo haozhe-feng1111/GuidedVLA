@@ -18,7 +18,7 @@ BASE="$(dirname "${PROJECT_ROOT}")"
 SERVER_PYTHON="${GUIDEDVLA_SERVER_PYTHON:-${BASE}/runtime/.venv/bin/python}"
 CLIENT_PYTHON="${GUIDEDVLA_CLIENT_PYTHON:-${BASE}/runtime/libero-plus-conda-py310/bin/python}"
 LIBERO_PLUS_PATH="${GUIDEDVLA_LIBERO_PLUS_PATH:-${BASE}/LIBERO-plus-4976dc3}"
-LIBERO_CONFIG_PATH="${GUIDEDVLA_LIBERO_CONFIG_PATH:-${BASE}/runtime/libero-plus-config}"
+COMPANY_LIBERO_CONFIG_PATH="${GUIDEDVLA_COMPANY_LIBERO_CONFIG_PATH:-${BASE}/runtime/libero-plus-config}"
 DEPTH_MODEL="${GUIDEDVLA_DEPTH_MODEL_PATH:-${BASE}/models/da3-small-e08cab65}"
 TOKENIZER_PATH="${GUIDEDVLA_TOKENIZER_PATH:-${BASE}/models/paligemma_tokenizer.model}"
 
@@ -50,6 +50,7 @@ export COMPILE_WARMUP_STEPS=0
 export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
+export LIBERO_CONFIG_PATH="${COMPANY_LIBERO_CONFIG_PATH}"
 export MUJOCO_GL="${MUJOCO_GL:-osmesa}"
 export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
 
@@ -80,7 +81,6 @@ EVAL_CMD=(
     --server-python "${SERVER_PYTHON}"
     --client-python "${CLIENT_PYTHON}"
     --libero-plus-path "${LIBERO_PLUS_PATH}"
-    --libero-config-path "${LIBERO_CONFIG_PATH}"
     --max-workers-per-gpu 1
     --estimated-worker-vram-gb 12
     --vram-safe-threshold 0.90
@@ -94,14 +94,26 @@ EVAL_CMD=(
 
 mkdir -p \
     "${RESULTS_ROOT}" "${LOG_ROOT}" \
-    "${LIBERO_CONFIG_PATH}" \
+    "${COMPANY_LIBERO_CONFIG_PATH}" \
     "${HF_HOME}" "${HF_HUB_CACHE}" "${TRANSFORMERS_CACHE}" \
     "${XDG_CACHE_HOME}" "${TORCHINDUCTOR_CACHE_DIR}" \
     "${TRITON_CACHE_DIR}" "${CUDA_CACHE_PATH}" "${TMP_ROOT}"
 
+COMPANY_LIBERO_CONFIG_FILE="${COMPANY_LIBERO_CONFIG_PATH}/config.yaml"
+COMPANY_LIBERO_CONFIG_TMP="${COMPANY_LIBERO_CONFIG_PATH}/.config.yaml.tmp.$$"
+printf '%s\n' \
+    "benchmark_root: ${LIBERO_PLUS_PATH}/libero/libero" \
+    "bddl_files: ${LIBERO_PLUS_PATH}/libero/libero/bddl_files" \
+    "init_states: ${LIBERO_PLUS_PATH}/libero/libero/init_files" \
+    "datasets: ${LIBERO_PLUS_PATH}/libero/datasets" \
+    "assets: ${LIBERO_PLUS_PATH}/libero/libero/assets" \
+    > "${COMPANY_LIBERO_CONFIG_TMP}"
+mv "${COMPANY_LIBERO_CONFIG_TMP}" "${COMPANY_LIBERO_CONFIG_FILE}"
+
 echo "Scheduler-visible GPUs: ${visible_gpu_ids[*]}"
 echo "Policy server Python: ${SERVER_PYTHON}"
 echo "LIBERO-plus client Python: ${CLIENT_PYTHON}"
+echo "Company LIBERO config: ${COMPANY_LIBERO_CONFIG_FILE}"
 echo "Checkpoint: ${CHECKPOINT}"
 echo "DA3-SMALL: ${DEPTH_MODEL}"
 echo "MuJoCo backend: ${MUJOCO_GL}"

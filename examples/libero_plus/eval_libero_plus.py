@@ -21,7 +21,6 @@ LOCAL_PATH_ARG_NAMES = (
     "server_python",
     "client_python",
     "libero_plus_path",
-    "libero_config_path",
     "results_base_dir",
     "video_base_dir",
     "log_dir",
@@ -36,7 +35,6 @@ class Args:
     server_python: str = sys.executable
     client_python: str = str(REPO_ROOT / "examples" / "libero_plus" / ".venv" / "bin" / "python")
     libero_plus_path: str = str(REPO_ROOT / "third_party" / "LIBERO-plus")
-    libero_config_path: str = str(REPO_ROOT / "data" / "libero_plus" / "config")
 
     results_base_dir: str = str(REPO_ROOT / "data" / "libero_plus")
     video_base_dir: str = str(REPO_ROOT / "data" / "libero_plus")
@@ -522,7 +520,6 @@ def _detect_virtual_env_root(python_path: pathlib.Path) -> Optional[pathlib.Path
 def _build_client_env(args: Args) -> dict[str, str]:
     client_env = os.environ.copy()
     client_env["PYTHONPATH"] = _compose_pythonpath(pathlib.Path(args.libero_plus_path), client_env.get("PYTHONPATH"))
-    client_env["LIBERO_CONFIG_PATH"] = args.libero_config_path
     client_env.pop("PYTHONHOME", None)
     venv_root = _detect_virtual_env_root(pathlib.Path(args.client_python))
     if venv_root is not None:
@@ -533,26 +530,6 @@ def _build_client_env(args: Args) -> dict[str, str]:
     if args.client_mujoco_gl:
         client_env["MUJOCO_GL"] = args.client_mujoco_gl
     return client_env
-
-
-def _prepare_libero_config(args: Args) -> pathlib.Path:
-    """Create LIBERO's config non-interactively before concurrent clients import it."""
-    config_dir = pathlib.Path(args.libero_config_path)
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_file = config_dir / "config.yaml"
-
-    benchmark_root = pathlib.Path(args.libero_plus_path) / "libero" / "libero"
-    config = {
-        "benchmark_root": str(benchmark_root),
-        "bddl_files": str(benchmark_root / "bddl_files"),
-        "init_states": str(benchmark_root / "init_files"),
-        "datasets": str(pathlib.Path(args.libero_plus_path) / "libero" / "datasets"),
-        "assets": str(benchmark_root / "assets"),
-    }
-    tmp_file = config_dir / ".config.yaml.tmp"
-    tmp_file.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp_file, config_file)
-    return config_file
 
 
 def _record_task_failure(message: str) -> None:
@@ -950,7 +927,6 @@ def _parse_cli_args() -> Args:
 def main(args: Args) -> None:
     global current_port  # noqa: PLW0603
     checkpoint_dir = _validate_args(args)
-    libero_config_file = _prepare_libero_config(args)
     client_summary = _run_client_preflight(args, _build_client_env(args))
     gpu_ids = _discover_gpu_ids(args.gpu_ids)
     current_port = args.start_port
@@ -963,7 +939,6 @@ def main(args: Args) -> None:
     print(f"Checkpoint: {checkpoint_dir}")
     print(f"GPU ids: {gpu_ids}")
     print(f"Task count: {len(all_tasks)}")
-    print(f"LIBERO config: {libero_config_file}")
     print(f"Task suites: {_parse_csv(args.task_suites)}")
     print(f"Categories: {_parse_csv(args.categories) or ['ALL']}")
     print(
