@@ -106,6 +106,12 @@ EVAL_CMD=(
     --num-trials-per-task "${GUIDEDVLA_NUM_TRIALS_PER_TASK:-1}"
 )
 
+# Preserve the full four-suite default.  Set GUIDEDVLA_TASK_SUITES to pass an
+# explicit comma-separated subset accepted by the evaluator, e.g. libero_object.
+if [[ -n "${GUIDEDVLA_TASK_SUITES:-}" ]]; then
+    EVAL_CMD+=(--task-suites "${GUIDEDVLA_TASK_SUITES}")
+fi
+
 mkdir -p \
     "${RESULTS_ROOT}" "${LOG_ROOT}" \
     "${COMPANY_LIBERO_CONFIG_PATH}" \
@@ -135,6 +141,7 @@ echo "Company LIBERO config: ${COMPANY_LIBERO_CONFIG_FILE}"
 echo "Company OSMesa runtime: ${COMPANY_OSMESA_LIB_PATH}"
 echo "Company Magick runtime: ${COMPANY_MAGICK_HOME}"
 echo "Checkpoint: ${CHECKPOINT}"
+echo "Task suites: ${GUIDEDVLA_TASK_SUITES:-ALL}"
 echo "DA3-SMALL: ${DEPTH_MODEL}"
 echo "MuJoCo backend: ${MUJOCO_GL}"
 

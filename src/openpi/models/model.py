@@ -1,4 +1,5 @@
 import abc
+import contextlib
 from collections.abc import Sequence
 import dataclasses
 import enum
@@ -47,6 +48,8 @@ IMAGE_KEYS = (
 # This may need change if we release a small model.
 IMAGE_RESOLUTION = (224, 224)
 
+_DEPTH_TOKEN_MERGING_PREFIX = "depth_module.token_merging_model."
+
 
 def normalize_pytorch_state_dict_for_loading(
     state_dict: dict[str, torch.Tensor],
@@ -82,6 +85,63 @@ def normalize_pytorch_state_dict_for_loading(
         normalized_state_dict[embed_tokens_key] = normalized_state_dict[lm_head_key]
 
     return normalized_state_dict
+
+
+@contextlib.contextmanager
+def temporarily_unwrap_compiled_modules_for_state_dict(model: torch.nn.Module):
+    """Temporarily unwrap nested ``torch.compile`` modules for checkpoint I/O.
+
+    Checkpoints are saved with canonical parameter names after compiled wrappers are
+    removed. Loading them directly into an ``OptimizedModule`` would instead expect
+    ``_orig_mod`` key segments and can silently skip weights under ``strict=False``.
+    """
+    root_model = model
+    while hasattr(root_model, "_orig_mod"):
+        root_model = root_model._orig_mod  # noqa: SLF001
+
+    replaced_children: list[tuple[torch.nn.Module, str, torch.nn.Module]] = []
+
+    def unwrap_children(module: torch.nn.Module) -> None:
+        for child_name, child_module in list(module.named_children()):
+            child_to_visit = child_module
+            if hasattr(child_module, "_orig_mod"):
+                replaced_children.append((module, child_name, child_module))
+                child_to_visit = child_module._orig_mod  # noqa: SLF001
+                setattr(module, child_name, child_to_visit)
+            unwrap_children(child_to_visit)
+
+    unwrap_children(root_model)
+    try:
+        yield root_model
+    finally:
+        for parent_module, child_name, compiled_child in reversed(replaced_children):
+            setattr(parent_module, child_name, compiled_child)
+
+
+def _validate_depth_token_merging_weights_loaded(
+    checkpoint_state_dict: dict[str, torch.Tensor],
+    missing_keys: list[str],
+    unexpected_keys: list[str],
+) -> None:
+    """Fail closed when a checkpoint's trained depth adapter was not loaded."""
+    checkpoint_has_adapter = any(key.startswith(_DEPTH_TOKEN_MERGING_PREFIX) for key in checkpoint_state_dict)
+    if not checkpoint_has_adapter:
+        return
+
+    adapter_missing = [key for key in missing_keys if key.startswith(_DEPTH_TOKEN_MERGING_PREFIX)]
+    adapter_unexpected = [key for key in unexpected_keys if key.startswith(_DEPTH_TOKEN_MERGING_PREFIX)]
+    if not adapter_missing and not adapter_unexpected:
+        return
+
+    details = []
+    if adapter_missing:
+        details.append(f"missing={adapter_missing}")
+    if adapter_unexpected:
+        details.append(f"unexpected={adapter_unexpected}")
+    raise RuntimeError(
+        "Checkpoint contains trained depth token-merging weights that were not fully loaded; "
+        "refusing to continue with an untrained depth adapter (" + "; ".join(details) + ")."
+    )
 
 
 # Data format
@@ -346,7 +406,9 @@ class BaseModelConfig(abc.ABC):
             source_label="PyTorch policy checkpoint",
         )
 
-        missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
+        with temporarily_unwrap_compiled_modules_for_state_dict(model) as model_to_load:
+            missing_keys, unexpected_keys = model_to_load.load_state_dict(new_state_dict, strict=False)
+        _validate_depth_token_merging_weights_loaded(new_state_dict, missing_keys, unexpected_keys)
 
         # Split missing keys into expected (depth/skill modules may not be in checkpoint) and unexpected.
         expected_missing, unexpected_missing = [], []
