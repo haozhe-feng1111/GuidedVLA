@@ -1,5 +1,6 @@
 # GuidedVLA addition: Depth encoder wrapping Depth Anything V3 for geometry-aware action attention (Depth Head).
 # Paper: "GuidedVLA: Specifying Task-Relevant Factors via Plug-and-Play Action Attention Specialization" (RSS 2026)
+import os
 import sys
 import types
 
@@ -35,6 +36,7 @@ class DepthEncoder(nn.Module):
     def __init__(self, depth_model_name, feature_dim=1024, freeze_depth_model=True):
         super().__init__()
 
+        depth_model_name = os.environ.get("OPENPI_DEPTH_MODEL_PATH", depth_model_name)
         self.da3_model = DepthAnything3.from_pretrained(depth_model_name)
         self.da3_model.eval()
 

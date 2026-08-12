@@ -8,6 +8,7 @@ import queue
 import shlex
 import signal
 import subprocess
+import sys
 import threading
 import time
 from contextlib import suppress
@@ -17,6 +18,7 @@ from tqdm import tqdm
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 LOCAL_PATH_ARG_NAMES = (
+    "server_python",
     "client_python",
     "libero_plus_path",
     "results_base_dir",
@@ -30,6 +32,7 @@ class Args:
     checkpoint_dir: Optional[str] = None
     policy_config: str = "pi0_libero_object_depth_skill"
 
+    server_python: str = sys.executable
     client_python: str = str(REPO_ROOT / "examples" / "libero_plus" / ".venv" / "bin" / "python")
     libero_plus_path: str = str(REPO_ROOT / "third_party" / "LIBERO-plus")
 
@@ -85,6 +88,8 @@ process_lock = threading.Lock()
 shutdown_event = threading.Event()
 shutdown_in_progress = threading.Event()
 task_queue: "queue.Queue[dict]" = queue.Queue()
+task_failure_lock = threading.Lock()
+task_failures: list[str] = []
 
 port_lock = threading.Lock()
 current_port = 0
@@ -173,7 +178,7 @@ def _absolute_path_preserve_symlinks(path_str: str) -> pathlib.Path:
 def _normalize_local_paths(args: Args) -> None:
     for field_name in LOCAL_PATH_ARG_NAMES:
         raw_path = getattr(args, field_name)
-        if field_name == "client_python":
+        if field_name in {"server_python", "client_python"}:
             normalized = _absolute_path_preserve_symlinks(raw_path)
         else:
             normalized = _resolve_path(raw_path)
@@ -527,6 +532,11 @@ def _build_client_env(args: Args) -> dict[str, str]:
     return client_env
 
 
+def _record_task_failure(message: str) -> None:
+    with task_failure_lock:
+        task_failures.append(message)
+
+
 def _build_server_env(args: Args, gpu_id: int) -> dict[str, str]:
     server_env = os.environ.copy()
     server_env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
@@ -611,10 +621,8 @@ def _start_logged_process(cmd: list[str], env: dict[str, str], log_path: pathlib
 
 def _build_server_cmd(args: Args, checkpoint_dir: str, port: int, mem_fraction: Optional[float]) -> list[str]:
     cmd = [
-        "uv",
-        "run",
-        "--no-sync",
-        "scripts/serve_policy.py",
+        args.server_python,
+        str(REPO_ROOT / "scripts" / "serve_policy.py"),
         "--env",
         "LIBERO",
         "--port",
@@ -637,10 +645,16 @@ def _build_server_cmd(args: Args, checkpoint_dir: str, port: int, mem_fraction: 
 
 def _build_client_cmd(args: Args, task: dict, port: int) -> tuple[list[str], pathlib.Path]:
     task_slug = task["slug"]
+    classification_path = (
+        pathlib.Path(args.libero_plus_path) / "libero" / "libero" / "benchmark" / "task_classification.json"
+    )
     if task["category"] is None:
-        result_json = pathlib.Path(args.results_base_dir) / f"{task_slug}.json"
+        result_json_base = pathlib.Path(args.results_base_dir) / f"{task_slug}.json"
+        result_json = result_json_base
     else:
-        result_json = pathlib.Path(args.results_base_dir) / task["suite"] / "results.json"
+        safe_category = task["category"].replace(" ", "_").replace("/", "_")
+        result_json_base = pathlib.Path(args.results_base_dir) / task["suite"] / "results.json"
+        result_json = pathlib.Path(args.results_base_dir) / task["suite"] / f"results_{safe_category}.json"
 
     video_path = pathlib.Path(args.video_base_dir) / task_slug
     cmd = []
@@ -658,7 +672,9 @@ def _build_client_cmd(args: Args, task: dict, port: int) -> tuple[list[str], pat
             "--args.video_out_path",
             str(video_path),
             "--args.results-json-path",
-            str(result_json),
+            str(result_json_base),
+            "--args.task-classification-path",
+            str(classification_path),
             "--args.port",
             str(port),
             "--args.host",
@@ -742,11 +758,22 @@ def run_worker_daemon(
             client_process: Optional[subprocess.Popen] = None
             try:
                 client_process = _start_logged_process(client_cmd, client_env, client_log_path)
+                timed_out = False
                 try:
                     client_process.wait(timeout=args.client_timeout_sec)
                 except subprocess.TimeoutExpired:
+                    timed_out = True
                     print(f"[Worker GPU {gpu_id}:{port}] Client timeout on {task_slug}; killing.")
                     _kill_process_tree(client_process)
+                    client_process.wait()
+                if timed_out:
+                    _record_task_failure(f"{task_slug}: timed out; log={client_log_path}")
+                elif client_process.returncode != 0:
+                    _record_task_failure(
+                        f"{task_slug}: client exited {client_process.returncode}; log={client_log_path}"
+                    )
+                elif not result_json.is_file():
+                    _record_task_failure(f"{task_slug}: missing result JSON {result_json}; log={client_log_path}")
                 # Verify the server still responds. If the client crashed in a
                 # way that took the server with it (rare but seen with MuJoCo
                 # OOM cascades), stop this worker so the monitor can respawn.
@@ -757,6 +784,7 @@ def run_worker_daemon(
                     break
             except Exception as exc:
                 print(f"[Worker GPU {gpu_id}:{port}] Client error on {task_slug}: {exc}")
+                _record_task_failure(f"{task_slug}: client exception {exc}; log={client_log_path}")
             finally:
                 if client_process is not None:
                     # Belt-and-suspenders: if still alive, kill its tree.
@@ -863,9 +891,16 @@ def _validate_args(args: Args) -> str:
     if not client_python.exists():
         raise FileNotFoundError(f"LIBERO-plus client Python was not found: {client_python}")
 
+    server_python = pathlib.Path(args.server_python)
+    if not server_python.exists():
+        raise FileNotFoundError(f"Policy server Python was not found: {server_python}")
+
     libero_plus_path = pathlib.Path(args.libero_plus_path)
     if not libero_plus_path.exists():
         raise FileNotFoundError(f"LIBERO-plus checkout was not found: {libero_plus_path}")
+    classification_path = libero_plus_path / "libero" / "libero" / "benchmark" / "task_classification.json"
+    if _parse_csv(args.categories) and not classification_path.is_file():
+        raise FileNotFoundError(f"LIBERO-plus task classification was not found: {classification_path}")
 
     if args.max_workers_per_gpu < 1:
         raise ValueError("max_workers_per_gpu must be >= 1")
@@ -952,7 +987,13 @@ def main(args: Args) -> None:
     for proc in _snapshot_active_processes():
         _kill_process_tree(proc)
 
-    print("All benchmarks completed.")
+    with task_failure_lock:
+        failures = list(task_failures)
+    if failures:
+        details = "\n".join(f"  - {failure}" for failure in failures)
+        raise RuntimeError(f"{len(failures)} benchmark task(s) failed:\n{details}")
+
+    print("All benchmarks completed successfully.")
 
 
 if __name__ == "__main__":

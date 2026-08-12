@@ -93,6 +93,68 @@ def test_observation_from_dict_accepts_uint8_torch_images_without_normalizing():
     assert observation.images["base_0_rgb"].dtype == torch.uint8
 
 
+class _TinyTokenMerging(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.merge = torch.nn.Linear(3, 2)
+        self.norm = torch.nn.LayerNorm(3)
+
+
+class _TinyDepthHost(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.depth_module = torch.nn.Module()
+        self.depth_module.token_merging_model = torch.compile(_TinyTokenMerging(), backend="eager")
+
+
+def _canonical_token_merging_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
+    compiled_state_dict = model.state_dict()
+    return {
+        key.replace(".token_merging_model._orig_mod.", ".token_merging_model."): torch.full_like(value, index + 1)
+        for index, (key, value) in enumerate(compiled_state_dict.items())
+    }
+
+
+@pytest.mark.parametrize("source_is_compiled", [False, True])
+def test_compiled_depth_adapter_loads_canonical_checkpoint_keys(source_is_compiled: bool):
+    model = _TinyDepthHost()
+    checkpoint_state_dict = _canonical_token_merging_state_dict(model)
+    if source_is_compiled:
+        checkpoint_state_dict = {
+            key.replace(".token_merging_model.", ".token_merging_model._orig_mod."): value
+            for key, value in checkpoint_state_dict.items()
+        }
+    checkpoint_state_dict = _model.normalize_pytorch_state_dict_for_loading(
+        checkpoint_state_dict,
+        source_label="test checkpoint",
+    )
+
+    with _model.temporarily_unwrap_compiled_modules_for_state_dict(model) as model_to_load:
+        missing_keys, unexpected_keys = model_to_load.load_state_dict(checkpoint_state_dict, strict=False)
+
+    _model._validate_depth_token_merging_weights_loaded(checkpoint_state_dict, missing_keys, unexpected_keys)
+    assert missing_keys == []
+    assert unexpected_keys == []
+    assert hasattr(model.depth_module.token_merging_model, "_orig_mod")
+
+    for key, expected in checkpoint_state_dict.items():
+        compiled_key = key.replace(".token_merging_model.", ".token_merging_model._orig_mod.")
+        torch.testing.assert_close(model.state_dict()[compiled_key], expected)
+
+
+def test_depth_adapter_guard_rejects_silent_load_failure():
+    model = _TinyDepthHost()
+    checkpoint_state_dict = _canonical_token_merging_state_dict(model)
+    missing_keys, unexpected_keys = model.load_state_dict(checkpoint_state_dict, strict=False)
+
+    with pytest.raises(RuntimeError, match="depth token-merging weights"):
+        _model._validate_depth_token_merging_weights_loaded(
+            checkpoint_state_dict,
+            missing_keys,
+            unexpected_keys,
+        )
+
+
 @pytest.mark.manual
 def test_model_restore():
     key = jax.random.key(0)
