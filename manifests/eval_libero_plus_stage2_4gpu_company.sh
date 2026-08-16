@@ -23,13 +23,28 @@ COMPANY_OSMESA_LIB_PATH="${GUIDEDVLA_COMPANY_OSMESA_LIB_PATH:-${BASE}/runtime/co
 COMPANY_MAGICK_HOME="${GUIDEDVLA_COMPANY_MAGICK_HOME:-${BASE}/runtime/company-osmesa}"
 DEPTH_MODEL="${GUIDEDVLA_DEPTH_MODEL_PATH:-${BASE}/models/da3-small-e08cab65}"
 TOKENIZER_PATH="${GUIDEDVLA_TOKENIZER_PATH:-${BASE}/models/paligemma_tokenizer.model}"
+REQUIRE_DEPTH_ASSETS="${GUIDEDVLA_REQUIRE_DEPTH_ASSETS:-1}"
+EXPECTED_GPU_COUNT="${GUIDEDVLA_EXPECTED_GPU_COUNT:-4}"
+
+case "${REQUIRE_DEPTH_ASSETS}" in
+    0|1) ;;
+    *)
+        echo "GUIDEDVLA_REQUIRE_DEPTH_ASSETS must be 0 or 1, got: ${REQUIRE_DEPTH_ASSETS}"
+        exit 1
+        ;;
+esac
+[[ "${EXPECTED_GPU_COUNT}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "GUIDEDVLA_EXPECTED_GPU_COUNT must be a positive integer, got: ${EXPECTED_GPU_COUNT}"
+    exit 1
+}
 
 RUN_ID="${GUIDEDVLA_EVAL_RUN_ID:-libero_plus_stage2_4gpu}"
 CHECKPOINT="${GUIDEDVLA_CHECKPOINT:-${BASE}/outputs/guidedvla_libero_stage2_object_depth_skill_4gpu_30k/pi0_libero_object_depth_skill/guidedvla_libero_stage2_object_depth_skill_4gpu_30k/30000}"
+POLICY_CONFIG="${GUIDEDVLA_POLICY_CONFIG:-pi0_libero_object_depth_skill}"
 RESULTS_ROOT="${BASE}/eval_results/${RUN_ID}"
 LOG_ROOT="${BASE}/logs/${RUN_ID}"
 CACHE_ROOT="${BASE}/cache/${RUN_ID}"
-TMP_ROOT="${BASE}/tmp"
+TMP_ROOT="${GUIDEDVLA_TMP_ROOT:-${BASE}/tmp}"
 
 export HF_HOME="${CACHE_ROOT}/hf"
 export HF_HUB_CACHE="${CACHE_ROOT}/hf-hub"
@@ -45,7 +60,11 @@ export TEMP="${TMPDIR}"
 
 export PYTHONPATH="${PROJECT_ROOT}/src:${PROJECT_ROOT}/packages/openpi-client/src:${PROJECT_ROOT}/third_party/depth_anything/src:${LIBERO_PLUS_PATH}${PYTHONPATH:+:${PYTHONPATH}}"
 export OPENPI_PALIGEMMA_TOKENIZER_PATH="${TOKENIZER_PATH}"
-export OPENPI_DEPTH_MODEL_PATH="${DEPTH_MODEL}"
+if [[ "${REQUIRE_DEPTH_ASSETS}" == "1" ]]; then
+    export OPENPI_DEPTH_MODEL_PATH="${DEPTH_MODEL}"
+else
+    unset OPENPI_DEPTH_MODEL_PATH
+fi
 export TORCH_COMPILE_DISABLE=1
 export TORCH_COMPILE=0
 export COMPILE_WARMUP_STEPS=0
@@ -63,10 +82,12 @@ export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
 [[ -x "${SERVER_PYTHON}" ]] || { echo "Missing policy server Python: ${SERVER_PYTHON}"; exit 1; }
 [[ -x "${CLIENT_PYTHON}" ]] || { echo "Missing LIBERO-plus client Python: ${CLIENT_PYTHON}"; exit 1; }
 [[ -f "${CHECKPOINT}/model.safetensors" ]] || { echo "Missing Stage 2 checkpoint: ${CHECKPOINT}"; exit 1; }
-[[ -f "${DEPTH_MODEL}/config.json" && -f "${DEPTH_MODEL}/model.safetensors" ]] || {
-    echo "Missing DA3-SMALL model files in: ${DEPTH_MODEL}"
-    exit 1
-}
+if [[ "${REQUIRE_DEPTH_ASSETS}" == "1" ]]; then
+    [[ -f "${DEPTH_MODEL}/config.json" && -f "${DEPTH_MODEL}/model.safetensors" ]] || {
+        echo "Missing DA3-SMALL model files in: ${DEPTH_MODEL}"
+        exit 1
+    }
+fi
 [[ -f "${TOKENIZER_PATH}" ]] || { echo "Missing tokenizer: ${TOKENIZER_PATH}"; exit 1; }
 [[ -f "${LIBERO_PLUS_PATH}/libero/libero/benchmark/task_classification.json" ]] || {
     echo "Missing LIBERO-plus checkout or assets: ${LIBERO_PLUS_PATH}"
@@ -83,15 +104,15 @@ export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-${MUJOCO_GL}}"
 command -v nvidia-smi >/dev/null || { echo "nvidia-smi is unavailable"; exit 1; }
 
 mapfile -t visible_gpu_ids < <(nvidia-smi --query-gpu=index --format=csv,noheader,nounits)
-[[ "${#visible_gpu_ids[@]}" -eq 4 ]] || {
-    echo "Expected exactly 4 scheduler-visible GPUs; nvidia-smi reports ${#visible_gpu_ids[@]}."
+[[ "${#visible_gpu_ids[@]}" -eq "${EXPECTED_GPU_COUNT}" ]] || {
+    echo "Expected exactly ${EXPECTED_GPU_COUNT} scheduler-visible GPUs; nvidia-smi reports ${#visible_gpu_ids[@]}."
     exit 1
 }
 
 EVAL_CMD=(
     "${SERVER_PYTHON}" examples/libero_plus/eval_libero_plus.py
     --checkpoint-dir "${CHECKPOINT}"
-    --policy-config pi0_libero_object_depth_skill
+    --policy-config "${POLICY_CONFIG}"
     --server-python "${SERVER_PYTHON}"
     --client-python "${CLIENT_PYTHON}"
     --libero-plus-path "${LIBERO_PLUS_PATH}"
@@ -110,6 +131,12 @@ EVAL_CMD=(
 # explicit comma-separated subset accepted by the evaluator, e.g. libero_object.
 if [[ -n "${GUIDEDVLA_TASK_SUITES:-}" ]]; then
     EVAL_CMD+=(--task-suites "${GUIDEDVLA_TASK_SUITES}")
+fi
+if [[ -n "${GUIDEDVLA_CATEGORIES:-}" ]]; then
+    EVAL_CMD+=(--categories "${GUIDEDVLA_CATEGORIES}")
+fi
+if [[ -n "${GUIDEDVLA_TASK_IDS:-}" ]]; then
+    EVAL_CMD+=(--task-ids "${GUIDEDVLA_TASK_IDS}")
 fi
 
 mkdir -p \
@@ -135,14 +162,22 @@ mv "${COMPANY_LIBERO_CONFIG_TMP}" "${COMPANY_LIBERO_CONFIG_FILE}"
     || { echo "Company client native runtime preflight failed."; exit 1; }
 
 echo "Scheduler-visible GPUs: ${visible_gpu_ids[*]}"
+echo "Expected scheduler-visible GPU count: ${EXPECTED_GPU_COUNT}"
 echo "Policy server Python: ${SERVER_PYTHON}"
 echo "LIBERO-plus client Python: ${CLIENT_PYTHON}"
 echo "Company LIBERO config: ${COMPANY_LIBERO_CONFIG_FILE}"
 echo "Company OSMesa runtime: ${COMPANY_OSMESA_LIB_PATH}"
 echo "Company Magick runtime: ${COMPANY_MAGICK_HOME}"
+echo "Policy config: ${POLICY_CONFIG}"
 echo "Checkpoint: ${CHECKPOINT}"
 echo "Task suites: ${GUIDEDVLA_TASK_SUITES:-ALL}"
-echo "DA3-SMALL: ${DEPTH_MODEL}"
+echo "Categories: ${GUIDEDVLA_CATEGORIES:-ALL}"
+echo "Task IDs: ${GUIDEDVLA_TASK_IDS:-ALL}"
+if [[ "${REQUIRE_DEPTH_ASSETS}" == "1" ]]; then
+    echo "DA3-SMALL: ${DEPTH_MODEL}"
+else
+    echo "DA3-SMALL: intentionally not required for this policy config"
+fi
 echo "MuJoCo backend: ${MUJOCO_GL}"
 
 if [[ "${GUIDEDVLA_CHECK_ONLY:-0}" == "1" ]]; then

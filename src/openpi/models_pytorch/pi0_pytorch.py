@@ -178,9 +178,8 @@ class PI0Pytorch(nn.Module):
         except ImportError:
             raise ValueError(msg) from None
 
-        self.use_depth = False
-        if config.use_depth:
-            self.use_depth = True
+        self.use_depth = config.use_depth and not config.disable_depth_at_inference
+        if self.use_depth:
             self.depth_module = DepthEncoder(
                 depth_model_name=config.depth_model_name, feature_dim=1024, freeze_depth_model=True
             )
@@ -190,6 +189,10 @@ class PI0Pytorch(nn.Module):
                 head_dim=256,
                 num_groups=len(self.guided_layer_indices),
                 depth_head_indices=config.depth_head_indices,
+            )
+        elif config.use_depth:
+            logging.info(
+                "Depth-inference-off ablation is enabled: omitting the depth encoder and depth KV projector."
             )
         elif self.guided_layer_indices:
             logging.info("guided_layer_indices is set but use_depth=False, so depth guidance is disabled.")

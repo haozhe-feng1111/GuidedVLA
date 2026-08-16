@@ -5,6 +5,7 @@ import torch
 from torch import nn
 
 from openpi.models import pi0_config
+from openpi.models_pytorch import pi0_pytorch
 from openpi.models_pytorch.control_attention import ControlAwareAttention
 from openpi.models_pytorch.control_attention import get_trainable_control_params
 from openpi.models_pytorch.gemma_pytorch import SupervisedHeadStates
@@ -58,6 +59,43 @@ def test_alignment_helpers_are_noops_when_input_dtype_is_already_correct():
 
     assert prefix_aligned.dtype == prefix.dtype
     assert suffix_aligned.dtype == suffix.dtype
+
+
+class _TinyPaliGemmaWithExpert(nn.Module):
+    def __init__(self, *_args, **_kwargs):
+        super().__init__()
+        self.paligemma = SimpleNamespace(language_model=SimpleNamespace(config=SimpleNamespace()))
+        self.gemma_expert = SimpleNamespace(model=SimpleNamespace(config=SimpleNamespace()))
+
+
+def test_depth_inference_off_does_not_construct_or_execute_depth_modules(monkeypatch):
+    tiny_config = SimpleNamespace(width=8, head_dim=4)
+    monkeypatch.setattr(pi0_pytorch._gemma, "get_config", lambda _variant: tiny_config)
+    monkeypatch.setattr(pi0_pytorch, "PaliGemmaWithExpertModel", _TinyPaliGemmaWithExpert)
+    monkeypatch.setattr(pi0_pytorch.torch, "compile", lambda function, **_kwargs: function)
+
+    def fail_if_constructed(*_args, **_kwargs):
+        pytest.fail("depth module must not be constructed when depth inference is disabled")
+
+    monkeypatch.setattr(pi0_pytorch, "DepthEncoder", fail_if_constructed)
+    monkeypatch.setattr(pi0_pytorch, "DepthTokenKVProjector", fail_if_constructed)
+
+    from transformers.models.siglip import check
+
+    monkeypatch.setattr(check, "check_whether_transformers_replace_is_installed_correctly", lambda: True)
+
+    config = pi0_config.Pi0Config(
+        paligemma_variant="dummy",
+        action_expert_variant="dummy",
+        use_depth=True,
+        disable_depth_at_inference=True,
+    )
+    model = PI0Pytorch(config)
+
+    assert not model.use_depth
+    assert not hasattr(model, "depth_module")
+    assert not hasattr(model, "depth_token_proj")
+    assert model.compute_depth_key_values([torch.zeros(1)]) is None
 
 
 class _TinyAttention(nn.Module):

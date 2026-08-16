@@ -804,6 +804,45 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         num_train_steps=30_000,
     ),
+    # Inference-only RGB ablation for the depth-trained Stage-2 checkpoint.
+    # Keep the original architecture settings so all non-depth weights load
+    # identically; PI0Pytorch removes only the depth path at runtime.
+    TrainConfig(
+        name="pi0_libero_object_depth_skill_depth_inference_off",
+        model=pi0_config.Pi0Config(
+            guided_layer_indices=[9, 10, 11, 12],
+            control_attention_enabled=True,
+            control_attention_num_heads=8,
+            use_object_loss=True,
+            object_head_indices=[0, 1],
+            object_use_control=False,
+            use_depth=True,
+            disable_depth_at_inference=True,
+            depth_model_name="path/to/da3-small",
+            depth_head_indices=[4, 5],
+            depth_use_control=True,
+            use_skill_loss=True,
+            skill_num_classes=4,
+            skill_head_indices=[6, 7],
+            skill_use_control=False,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="ybwowen/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                use_object_loss=True,
+                use_skill_loss=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        pytorch_training_precision="float32",
+        object_loss_weight=0.001,
+        skill_loss_weight=0.001,
+        batch_size=64,
+        num_workers=8,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=30_000,
+    ),
     TrainConfig(
         name="pi0_libero_object",
         model=pi0_config.Pi0Config(

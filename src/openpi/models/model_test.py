@@ -155,6 +155,69 @@ def test_depth_adapter_guard_rejects_silent_load_failure():
         )
 
 
+def test_depth_inference_ablation_is_noop_by_default():
+    state_dict = {"depth_module.encoder.weight": torch.ones(1)}
+
+    filtered_state_dict = _model.filter_depth_weights_for_inference_ablation(
+        state_dict,
+        enabled=False,
+    )
+
+    assert filtered_state_dict is state_dict
+
+
+def test_depth_inference_ablation_removes_only_exact_depth_branch_prefixes():
+    state_dict = {
+        "depth_module.encoder.weight": torch.ones(1),
+        "depth_module.token_merging_model.merge.weight": torch.ones(1),
+        "depth_token_proj.k_proj.weight": torch.ones(1),
+        "depth_module_extra.encoder.weight": torch.ones(1),
+        "module.depth_module.encoder.weight": torch.ones(1),
+        "depth_token_projector.k_proj.weight": torch.ones(1),
+        "paligemma_with_expert.gemma_expert.weight": torch.ones(1),
+    }
+
+    filtered_state_dict = _model.filter_depth_weights_for_inference_ablation(
+        state_dict,
+        enabled=True,
+    )
+
+    assert set(filtered_state_dict) == {
+        "depth_module_extra.encoder.weight",
+        "module.depth_module.encoder.weight",
+        "depth_token_projector.k_proj.weight",
+        "paligemma_with_expert.gemma_expert.weight",
+    }
+    for key, value in filtered_state_dict.items():
+        assert value is state_dict[key]
+
+
+@pytest.mark.parametrize(
+    "state_dict",
+    [
+        {},
+        {"depth_module.encoder.weight": torch.ones(1)},
+        {"depth_token_proj.k_proj.weight": torch.ones(1)},
+    ],
+)
+def test_depth_inference_ablation_rejects_incomplete_depth_checkpoint(state_dict):
+    with pytest.raises(RuntimeError, match="missing prefix"):
+        _model.filter_depth_weights_for_inference_ablation(
+            state_dict,
+            enabled=True,
+        )
+
+
+def test_disable_depth_at_inference_requires_depth_trained_config():
+    with pytest.raises(ValueError, match="use_depth=True"):
+        pi0_config.Pi0Config(disable_depth_at_inference=True)
+
+    assert pi0_config.Pi0Config(
+        use_depth=True,
+        disable_depth_at_inference=True,
+    ).disable_depth_at_inference
+
+
 @pytest.mark.manual
 def test_model_restore():
     key = jax.random.key(0)

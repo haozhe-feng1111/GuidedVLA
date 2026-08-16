@@ -70,6 +70,10 @@ class Pi0Config(_model.BaseModelConfig):
 
     # Depth
     use_depth: bool = False
+    # Inference-only ablation for checkpoints trained with depth guidance. The
+    # checkpoint still has to declare ``use_depth=True``; the PyTorch runtime
+    # then omits the depth branch and its checkpoint weights explicitly.
+    disable_depth_at_inference: bool = False
     depth_model_name: str = None
     depth_head_indices: list[int] = field(default_factory=lambda: [4])
     # Whether depth attention modifications should be applied to the control branch.
@@ -99,6 +103,11 @@ class Pi0Config(_model.BaseModelConfig):
             raise ValueError(
                 "control_attention_enabled is False but a *_use_control flag is True. "
                 "Either enable control attention or disable the *_use_control flags."
+            )
+
+        if self.disable_depth_at_inference and not self.use_depth:
+            raise ValueError(
+                "disable_depth_at_inference is only valid for a checkpoint configured with use_depth=True."
             )
 
         # Validate head indices - allow empty lists to disable distillation.

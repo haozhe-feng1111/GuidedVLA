@@ -49,6 +49,7 @@ IMAGE_KEYS = (
 IMAGE_RESOLUTION = (224, 224)
 
 _DEPTH_TOKEN_MERGING_PREFIX = "depth_module.token_merging_model."
+_DEPTH_INFERENCE_ABLATION_PREFIXES = ("depth_module.", "depth_token_proj.")
 
 
 def normalize_pytorch_state_dict_for_loading(
@@ -142,6 +143,41 @@ def _validate_depth_token_merging_weights_loaded(
         "Checkpoint contains trained depth token-merging weights that were not fully loaded; "
         "refusing to continue with an untrained depth adapter (" + "; ".join(details) + ")."
     )
+
+
+def filter_depth_weights_for_inference_ablation(
+    checkpoint_state_dict: dict[str, torch.Tensor],
+    *,
+    enabled: bool,
+) -> dict[str, torch.Tensor]:
+    """Remove only complete depth branch weights for the explicit RGB-only ablation."""
+
+    if not enabled:
+        return checkpoint_state_dict
+
+    missing_prefixes = [
+        prefix
+        for prefix in _DEPTH_INFERENCE_ABLATION_PREFIXES
+        if not any(key.startswith(prefix) for key in checkpoint_state_dict)
+    ]
+    if missing_prefixes:
+        raise RuntimeError(
+            "Depth-inference-off ablation requires a depth-trained checkpoint with weights for "
+            f"{_DEPTH_INFERENCE_ABLATION_PREFIXES}; missing prefix(es): {missing_prefixes}."
+        )
+
+    removed_keys = [
+        key for key in checkpoint_state_dict if key.startswith(_DEPTH_INFERENCE_ABLATION_PREFIXES)
+    ]
+    logger.warning(
+        "Depth-inference-off ablation: intentionally skipped %d depth checkpoint tensor(s).",
+        len(removed_keys),
+    )
+    return {
+        key: value
+        for key, value in checkpoint_state_dict.items()
+        if not key.startswith(_DEPTH_INFERENCE_ABLATION_PREFIXES)
+    }
 
 
 # Data format
@@ -404,6 +440,11 @@ class BaseModelConfig(abc.ABC):
         new_state_dict = normalize_pytorch_state_dict_for_loading(
             state_dict,
             source_label="PyTorch policy checkpoint",
+        )
+        depth_disabled_at_inference = getattr(model_config, "disable_depth_at_inference", False)
+        new_state_dict = filter_depth_weights_for_inference_ablation(
+            new_state_dict,
+            enabled=depth_disabled_at_inference,
         )
 
         with temporarily_unwrap_compiled_modules_for_state_dict(model) as model_to_load:
