@@ -107,6 +107,14 @@ class _TinyDepthHost(torch.nn.Module):
         self.depth_module.token_merging_model = torch.compile(_TinyTokenMerging(), backend="eager")
 
 
+class _TinySam2Host(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.sam2_module = torch.nn.Module()
+        self.sam2_module.token_merging_model = torch.compile(_TinyTokenMerging(), backend="eager")
+        self.sam2_token_proj = torch.nn.Linear(3, 2)
+
+
 def _canonical_token_merging_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
     compiled_state_dict = model.state_dict()
     return {
@@ -216,6 +224,70 @@ def test_disable_depth_at_inference_requires_depth_trained_config():
         use_depth=True,
         disable_depth_at_inference=True,
     ).disable_depth_at_inference
+@pytest.mark.parametrize("source_is_compiled", [False, True])
+def test_compiled_sam2_adapter_loads_canonical_checkpoint_keys(source_is_compiled: bool):
+    model = _TinySam2Host()
+    checkpoint_state_dict = _canonical_token_merging_state_dict(model)
+    if source_is_compiled:
+        checkpoint_state_dict = {
+            key.replace(".token_merging_model.", ".token_merging_model._orig_mod."): value
+            for key, value in checkpoint_state_dict.items()
+        }
+    checkpoint_state_dict = _model.normalize_pytorch_state_dict_for_loading(
+        checkpoint_state_dict,
+        source_label="test checkpoint",
+    )
+
+    with _model.temporarily_unwrap_compiled_modules_for_state_dict(model) as model_to_load:
+        missing_keys, unexpected_keys = model_to_load.load_state_dict(checkpoint_state_dict, strict=False)
+
+    _model._validate_sam2_adapter_weights_loaded(checkpoint_state_dict, missing_keys, unexpected_keys)
+    assert missing_keys == []
+    assert unexpected_keys == []
+    assert hasattr(model.sam2_module.token_merging_model, "_orig_mod")
+
+    for key, expected in checkpoint_state_dict.items():
+        compiled_key = key.replace(".token_merging_model.", ".token_merging_model._orig_mod.")
+        torch.testing.assert_close(model.state_dict()[compiled_key], expected)
+
+
+def test_sam2_adapter_guard_rejects_missing_kv_projector_weights():
+    model = _TinySam2Host()
+    checkpoint_state_dict = _canonical_token_merging_state_dict(model)
+    checkpoint_state_dict.pop("sam2_token_proj.weight")
+
+    with _model.temporarily_unwrap_compiled_modules_for_state_dict(model) as model_to_load:
+        missing_keys, unexpected_keys = model_to_load.load_state_dict(checkpoint_state_dict, strict=False)
+
+    with pytest.raises(RuntimeError, match="SAM2 adapter weights"):
+        _model._validate_sam2_adapter_weights_loaded(
+            checkpoint_state_dict,
+            missing_keys,
+            unexpected_keys,
+        )
+
+
+def test_pi0_config_rejects_simultaneous_depth_and_sam2_encoders():
+    with pytest.raises(ValueError, match="mutually exclusive encoder arms"):
+        pi0_config.Pi0Config(
+            use_depth=True,
+            depth_model_name="/tmp/depth",
+            use_sam2=True,
+            sam2_model_config="configs/sam2.1/sam2.1_hiera_t.yaml",
+            sam2_checkpoint_path="/tmp/sam2.pt",
+        )
+
+
+def test_pi0_config_accepts_sam2_encoder_arm():
+    config = pi0_config.Pi0Config(
+        control_attention_enabled=True,
+        use_sam2=True,
+        sam2_model_config="configs/sam2.1/sam2.1_hiera_t.yaml",
+        sam2_checkpoint_path="/tmp/sam2.pt",
+        sam2_head_indices=[4, 5],
+        sam2_use_control=True,
+    )
+    assert config.sam2_head_indices == [4, 5]
 
 
 @pytest.mark.manual

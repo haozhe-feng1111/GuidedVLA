@@ -9,6 +9,10 @@ results/
 out/
 core.*
 
+# Locally provisioned official SAM2 source and its isolated Python dependencies.
+third_party/sam2/
+third_party/sam2_deps/
+
 # Local agent, editor, and tool state.
 .agents/
 .claude/

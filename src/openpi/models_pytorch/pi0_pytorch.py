@@ -20,6 +20,7 @@ from openpi.models_pytorch.gemma_pytorch import HeadSupervisionConfig
 from openpi.models_pytorch.gemma_pytorch import PaliGemmaWithExpertModel
 from openpi.models_pytorch.gemma_pytorch import SupervisedHeadStates
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
+from openpi.models_pytorch.sam2.model import Sam2Encoder
 
 
 def get_safe_dtype(target_dtype, device_type):
@@ -117,7 +118,13 @@ class PI0Pytorch(nn.Module):
         self.skill_head_indices = tuple(skill_head_indices or [])
         self.guided_layer_indices = tuple(guided_layer_indices or [])
         self.object_use_control = bool(getattr(config, "object_use_control", True))
+        self.use_depth = bool(getattr(config, "use_depth", False))
+        self.use_sam2 = bool(getattr(config, "use_sam2", False))
+        if self.use_depth and self.use_sam2:
+            raise ValueError("use_depth and use_sam2 are mutually exclusive encoder arms")
+        self.sam2_use_control = bool(getattr(config, "sam2_use_control", False))
         self.depth_use_control = bool(getattr(config, "depth_use_control", True))
+        self.external_kv_use_control = self.sam2_use_control if self.use_sam2 else self.depth_use_control
         self.skill_use_control = bool(getattr(config, "skill_use_control", True))
 
         if not self.object_head_indices and hasattr(config, "num_object_distill_heads"):
@@ -135,8 +142,9 @@ class PI0Pytorch(nn.Module):
             use_adarms=[False, True] if self.pi05 else [False, False],
             precision=config.dtype,
         )
-        # Control whether depth attention modifications apply to the control branch.
-        self.paligemma_with_expert._depth_use_control = self.depth_use_control  # noqa: SLF001
+        # ``depth_kv`` is the legacy transport name used downstream for external
+        # encoder K/V. It carries either DA3 depth tokens or SAM2 visual tokens.
+        self.paligemma_with_expert._depth_use_control = self.external_kv_use_control  # noqa: SLF001
 
         self.action_in_proj = nn.Linear(32, action_expert_config.width)
         self.action_out_proj = nn.Linear(action_expert_config.width, 32)
@@ -179,6 +187,7 @@ class PI0Pytorch(nn.Module):
             raise ValueError(msg) from None
 
         self.use_depth = config.use_depth and not config.disable_depth_at_inference
+        self.use_sam2 = config.use_sam2
         if self.use_depth:
             self.depth_module = DepthEncoder(
                 depth_model_name=config.depth_model_name, feature_dim=1024, freeze_depth_model=True
@@ -194,8 +203,24 @@ class PI0Pytorch(nn.Module):
             logging.info(
                 "Depth-inference-off ablation is enabled: omitting the depth encoder and depth KV projector."
             )
+        elif self.use_sam2:
+            self.sam2_module = Sam2Encoder(
+                sam2_model_config=config.sam2_model_config,
+                sam2_checkpoint_path=config.sam2_checkpoint_path,
+                feature_dim=1024,
+                image_size=config.sam2_image_size,
+                token_grid_size=config.sam2_token_grid_size,
+                freeze_sam2_model=True,
+            )
+            self.sam2_token_proj = DepthTokenKVProjector(
+                hidden_size=1024,
+                num_heads=8,
+                head_dim=256,
+                num_groups=len(self.guided_layer_indices),
+                depth_head_indices=config.sam2_head_indices,
+            )
         elif self.guided_layer_indices:
-            logging.info("guided_layer_indices is set but use_depth=False, so depth guidance is disabled.")
+            logging.info("guided_layer_indices is set but no external encoder arm is enabled.")
 
         num_patches = 256
         indices_list = []
@@ -250,14 +275,21 @@ class PI0Pytorch(nn.Module):
         return self.get_guided_layers()
 
     def compute_depth_key_values(self, images):
-        if not self.use_depth:
+        if self.use_depth:
+            external_features = self.depth_module(images[0])
+            token_projector = self.depth_token_proj
+            encoder_name = "DA3 depth"
+        elif self.use_sam2:
+            external_features = self.sam2_module(images[0])
+            token_projector = self.sam2_token_proj
+            encoder_name = "SAM2"
+        else:
             return None
 
-        depth_features = self.depth_module(images[0])
-        depth_kv = self.depth_token_proj(depth_features)
+        depth_kv = token_projector(external_features)
         if len(depth_kv) != len(self.guided_layer_indices):
             raise RuntimeError(
-                "Depth projector output count does not match guided_layer_indices. "
+                f"{encoder_name} projector output count does not match guided_layer_indices. "
                 f"Expected {len(self.guided_layer_indices)}, got {len(depth_kv)}."
             )
         return depth_kv

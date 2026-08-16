@@ -79,6 +79,23 @@ class Pi0Config(_model.BaseModelConfig):
     # Whether depth attention modifications should be applied to the control branch.
     depth_use_control: bool = False
 
+    # SAM 2.1 external visual encoder. This arm is intentionally mutually
+    # exclusive with the DA3 depth encoder so an encoder comparison changes one
+    # external feature source at a time.
+    use_sam2: bool = False
+    # Hydra config name resolved from the vendored official SAM2 package.
+    sam2_model_config: str | None = None
+    # Local official SAM2.1 Tiny checkpoint path.
+    sam2_checkpoint_path: str | None = None
+    # Action-attention heads assigned to SAM2 K/V injection.
+    sam2_head_indices: list[int] = field(default_factory=lambda: [4])
+    # Whether SAM2 K/V injection should use the control branch.
+    sam2_use_control: bool = False
+    # SAM2.1 Hiera models are pretrained at this square image resolution.
+    sam2_image_size: int = 1024
+    # Each FPN level is resized to this square token grid before the shared 4x4 merger.
+    sam2_token_grid_size: int = 64
+
     # Skill (H_skill)
     use_skill_loss: bool = False
     # Number of discrete skill classes available in the dataset / model head.
@@ -97,8 +114,26 @@ class Pi0Config(_model.BaseModelConfig):
             object.__setattr__(self, "discrete_state_input", self.pi05)
 
         # Control-branch sanity checks.
+        if self.use_depth and self.use_sam2:
+            raise ValueError("use_depth and use_sam2 are mutually exclusive encoder arms")
+
+        if self.use_sam2:
+            if not self.sam2_model_config:
+                raise ValueError("sam2_model_config must be set when use_sam2 is True")
+            if not self.sam2_checkpoint_path:
+                raise ValueError("sam2_checkpoint_path must be set when use_sam2 is True")
+            if self.sam2_image_size <= 0:
+                raise ValueError("sam2_image_size must be positive")
+            if self.sam2_token_grid_size <= 0:
+                raise ValueError("sam2_token_grid_size must be positive")
+            if len(self.sam2_head_indices) == 0:
+                raise ValueError("sam2_head_indices must be non-empty when use_sam2 is True")
+
         if not self.control_attention_enabled and (
-            self.object_use_control or self.skill_use_control or self.depth_use_control
+            self.object_use_control
+            or self.skill_use_control
+            or self.depth_use_control
+            or self.sam2_use_control
         ):
             raise ValueError(
                 "control_attention_enabled is False but a *_use_control flag is True. "
@@ -115,6 +150,7 @@ class Pi0Config(_model.BaseModelConfig):
             ("object_head_indices", self.object_head_indices),
             ("skill_head_indices", self.skill_head_indices),
             ("depth_head_indices", self.depth_head_indices),
+            ("sam2_head_indices", self.sam2_head_indices),
         ):
             if any(idx < 0 for idx in indices):
                 raise ValueError(f"{name} must contain non-negative indices")
@@ -126,6 +162,8 @@ class Pi0Config(_model.BaseModelConfig):
             raise ValueError("skill_head_indices contains duplicate entries")
         if len(set(self.depth_head_indices)) != len(self.depth_head_indices):
             raise ValueError("depth_head_indices contains duplicate entries")
+        if len(set(self.sam2_head_indices)) != len(self.sam2_head_indices):
+            raise ValueError("sam2_head_indices contains duplicate entries")
         if any(idx < 0 for idx in self.guided_layer_indices):
             raise ValueError("guided_layer_indices must contain non-negative indices")
         if len(self.guided_layer_indices) != 4:
@@ -156,6 +194,19 @@ class Pi0Config(_model.BaseModelConfig):
                 "skill_head_indices and depth_head_indices must be disjoint. "
                 f"Overlapping heads: {overlapping_skill_depth}"
             )
+        if self.use_sam2:
+            overlapping_object_sam2 = sorted(set(self.object_head_indices) & set(self.sam2_head_indices))
+            if overlapping_object_sam2:
+                raise ValueError(
+                    "object_head_indices and sam2_head_indices must be disjoint. "
+                    f"Overlapping heads: {overlapping_object_sam2}"
+                )
+            overlapping_skill_sam2 = sorted(set(self.skill_head_indices) & set(self.sam2_head_indices))
+            if overlapping_skill_sam2:
+                raise ValueError(
+                    "skill_head_indices and sam2_head_indices must be disjoint. "
+                    f"Overlapping heads: {overlapping_skill_sam2}"
+                )
 
     @property
     @override
