@@ -447,16 +447,58 @@ def normalize_state_dict_for_loading(
     return state_dict
 
 
+_EXPECTED_ADAPTER_MISSING_KEY_PREFIXES = (
+    "depth",
+    "sam2_module.",
+    "sam2_token_proj.",
+    "skill_head.",
+)
+
+_NEW_HEAD_PARAM_NAME_MARKERS = (
+    "object_branch",
+    "q_expand_linear",
+    "zero_conv",
+    "skill_head",
+    "depth_token_proj",
+    "sam2_token_proj",
+    "token_merging_model",
+)
+
+
 def split_missing_keys(missing_keys: list[str]) -> tuple[list[str], list[str]]:
     """Split missing keys into expected and unexpected groups."""
     expected_missing_keys = []
     unexpected_missing_keys = []
     for key in missing_keys:
-        if key.startswith(("depth", "skill_head.")):
+        if key.startswith(_EXPECTED_ADAPTER_MISSING_KEY_PREFIXES):
             expected_missing_keys.append(key)
         else:
             unexpected_missing_keys.append(key)
     return expected_missing_keys, unexpected_missing_keys
+
+
+def _is_new_head_parameter(name: str) -> bool:
+    return any(marker in name for marker in _NEW_HEAD_PARAM_NAME_MARKERS)
+
+
+def _guided_training_config_enabled(model_config) -> bool:
+    return any(
+        [
+            getattr(model_config, "control_attention_enabled", False),
+            getattr(model_config, "use_object_loss", False),
+            getattr(model_config, "use_depth", False),
+            getattr(model_config, "use_sam2", False),
+            getattr(model_config, "use_skill_loss", False),
+        ]
+    )
+
+
+def validate_training_model_config(model_config) -> None:
+    if getattr(model_config, "disable_depth_at_inference", False):
+        raise ValueError(
+            "disable_depth_at_inference is an inference-only ablation and cannot be used for training. "
+            "Use a training configuration with depth inference enabled."
+        )
 
 
 def unwrap_model(model, *, log_compile_unwrap: bool = False):
@@ -871,6 +913,8 @@ def build_model(
     use_object_loss: bool,
 ):
     """Build model, load weights, enable ControlAttention, compile, wrap with DDP."""
+    validate_training_model_config(train_model_config)
+
     if not isinstance(config.model, openpi.models.pi0_config.Pi0Config):
         runtime_model_config = openpi.models.pi0_config.Pi0Config(
             dtype=config.pytorch_training_precision,
@@ -888,14 +932,7 @@ def build_model(
     model = openpi.models_pytorch.pi0_pytorch.PI0Pytorch(runtime_model_config).to(device)
     del model.paligemma_with_expert.gemma_expert.lm_head
 
-    guided_config_enabled = any(
-        [
-            getattr(train_model_config, "control_attention_enabled", False),
-            getattr(train_model_config, "use_object_loss", False),
-            getattr(train_model_config, "use_depth", False),
-            getattr(train_model_config, "use_skill_loss", False),
-        ]
-    )
+    guided_config_enabled = _guided_training_config_enabled(train_model_config)
     if guided_config_enabled and config.pytorch_weight_path is None and not resuming:
         logging.warning(
             "Guided PyTorch training is starting from scratch because pytorch_weight_path=None. "
@@ -1052,17 +1089,7 @@ def build_optimizer(model, config: _config.TrainConfig, peak_lr: float):
         for name, param in (model.module if hasattr(model, "module") else model).named_parameters():
             if not param.requires_grad:
                 continue
-            if any(
-                k in name
-                for k in [
-                    "object_branch",
-                    "q_expand_linear",
-                    "zero_conv",
-                    "skill_head",
-                    "depth_token_proj",
-                    "token_merging_model",
-                ]
-            ):
+            if _is_new_head_parameter(name):
                 new_head_params.append(param)
             else:
                 backbone_params.append(param)
