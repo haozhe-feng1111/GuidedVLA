@@ -96,6 +96,15 @@ class Pi0Config(_model.BaseModelConfig):
     # Each FPN level is resized to this square token grid before the shared 4x4 merger.
     sam2_token_grid_size: int = 64
 
+    # Shared frozen ViT-B/16 arm for MAE and DINOv3 encoder ablations.
+    use_patch16_encoder: bool = False
+    patch16_encoder_kind: Literal["mae", "dinov3"] | None = None
+    patch16_source_root: str | None = None
+    patch16_checkpoint_path: str | None = None
+    patch16_intermediate_layers: list[int] = field(default_factory=lambda: [5, 7, 9, 11])
+    patch16_head_indices: list[int] = field(default_factory=lambda: [4])
+    patch16_use_control: bool = False
+
     # Skill (H_skill)
     use_skill_loss: bool = False
     # Number of discrete skill classes available in the dataset / model head.
@@ -114,8 +123,9 @@ class Pi0Config(_model.BaseModelConfig):
             object.__setattr__(self, "discrete_state_input", self.pi05)
 
         # Control-branch sanity checks.
-        if self.use_depth and self.use_sam2:
-            raise ValueError("use_depth and use_sam2 are mutually exclusive encoder arms")
+        enabled_external_encoders = sum((self.use_depth, self.use_sam2, self.use_patch16_encoder))
+        if enabled_external_encoders > 1:
+            raise ValueError("depth, SAM2, and Patch16 encoder arms are mutually exclusive")
 
         if self.use_sam2:
             if not self.sam2_model_config:
@@ -129,11 +139,24 @@ class Pi0Config(_model.BaseModelConfig):
             if len(self.sam2_head_indices) == 0:
                 raise ValueError("sam2_head_indices must be non-empty when use_sam2 is True")
 
+        if self.use_patch16_encoder:
+            if self.patch16_encoder_kind not in ("mae", "dinov3"):
+                raise ValueError("patch16_encoder_kind must be 'mae' or 'dinov3'")
+            if not self.patch16_checkpoint_path:
+                raise ValueError("patch16_checkpoint_path must be set when use_patch16_encoder is True")
+            if self.patch16_encoder_kind == "dinov3" and not self.patch16_source_root:
+                raise ValueError("patch16_source_root must be set for DINOv3")
+            if len(self.patch16_intermediate_layers) != 4:
+                raise ValueError("patch16_intermediate_layers must contain exactly four layers")
+            if len(self.patch16_head_indices) == 0:
+                raise ValueError("patch16_head_indices must be non-empty")
+
         if not self.control_attention_enabled and (
             self.object_use_control
             or self.skill_use_control
             or self.depth_use_control
             or self.sam2_use_control
+            or self.patch16_use_control
         ):
             raise ValueError(
                 "control_attention_enabled is False but a *_use_control flag is True. "
@@ -151,6 +174,7 @@ class Pi0Config(_model.BaseModelConfig):
             ("skill_head_indices", self.skill_head_indices),
             ("depth_head_indices", self.depth_head_indices),
             ("sam2_head_indices", self.sam2_head_indices),
+            ("patch16_head_indices", self.patch16_head_indices),
         ):
             if any(idx < 0 for idx in indices):
                 raise ValueError(f"{name} must contain non-negative indices")
@@ -164,6 +188,8 @@ class Pi0Config(_model.BaseModelConfig):
             raise ValueError("depth_head_indices contains duplicate entries")
         if len(set(self.sam2_head_indices)) != len(self.sam2_head_indices):
             raise ValueError("sam2_head_indices contains duplicate entries")
+        if len(set(self.patch16_head_indices)) != len(self.patch16_head_indices):
+            raise ValueError("patch16_head_indices contains duplicate entries")
         if any(idx < 0 for idx in self.guided_layer_indices):
             raise ValueError("guided_layer_indices must contain non-negative indices")
         if len(self.guided_layer_indices) != 4:
@@ -207,6 +233,11 @@ class Pi0Config(_model.BaseModelConfig):
                     "skill_head_indices and sam2_head_indices must be disjoint. "
                     f"Overlapping heads: {overlapping_skill_sam2}"
                 )
+        if self.use_patch16_encoder:
+            for label, occupied in (("object", self.object_head_indices), ("skill", self.skill_head_indices)):
+                overlap = sorted(set(occupied) & set(self.patch16_head_indices))
+                if overlap:
+                    raise ValueError(f"{label}_head_indices and patch16_head_indices overlap: {overlap}")
 
     @property
     @override

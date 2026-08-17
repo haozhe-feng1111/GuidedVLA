@@ -19,6 +19,7 @@ from openpi.models_pytorch.depth.model import DepthEncoder
 from openpi.models_pytorch.gemma_pytorch import HeadSupervisionConfig
 from openpi.models_pytorch.gemma_pytorch import PaliGemmaWithExpertModel
 from openpi.models_pytorch.gemma_pytorch import SupervisedHeadStates
+from openpi.models_pytorch.patch16.model import Patch16Encoder
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 from openpi.models_pytorch.sam2.model import Sam2Encoder
 
@@ -120,11 +121,19 @@ class PI0Pytorch(nn.Module):
         self.object_use_control = bool(getattr(config, "object_use_control", True))
         self.use_depth = bool(getattr(config, "use_depth", False))
         self.use_sam2 = bool(getattr(config, "use_sam2", False))
-        if self.use_depth and self.use_sam2:
-            raise ValueError("use_depth and use_sam2 are mutually exclusive encoder arms")
+        self.use_patch16_encoder = bool(getattr(config, "use_patch16_encoder", False))
+        if sum((self.use_depth, self.use_sam2, self.use_patch16_encoder)) > 1:
+            raise ValueError("depth, SAM2, and Patch16 encoder arms are mutually exclusive")
         self.sam2_use_control = bool(getattr(config, "sam2_use_control", False))
+        self.patch16_use_control = bool(getattr(config, "patch16_use_control", False))
         self.depth_use_control = bool(getattr(config, "depth_use_control", True))
-        self.external_kv_use_control = self.sam2_use_control if self.use_sam2 else self.depth_use_control
+        self.external_kv_use_control = (
+            self.patch16_use_control
+            if self.use_patch16_encoder
+            else self.sam2_use_control
+            if self.use_sam2
+            else self.depth_use_control
+        )
         self.skill_use_control = bool(getattr(config, "skill_use_control", True))
 
         if not self.object_head_indices and hasattr(config, "num_object_distill_heads"):
@@ -188,6 +197,7 @@ class PI0Pytorch(nn.Module):
 
         self.use_depth = config.use_depth and not config.disable_depth_at_inference
         self.use_sam2 = config.use_sam2
+        self.use_patch16_encoder = config.use_patch16_encoder
         if self.use_depth:
             self.depth_module = DepthEncoder(
                 depth_model_name=config.depth_model_name, feature_dim=1024, freeze_depth_model=True
@@ -218,6 +228,22 @@ class PI0Pytorch(nn.Module):
                 head_dim=256,
                 num_groups=len(self.guided_layer_indices),
                 depth_head_indices=config.sam2_head_indices,
+            )
+        elif self.use_patch16_encoder:
+            self.patch16_module = Patch16Encoder(
+                encoder_kind=config.patch16_encoder_kind,
+                source_root=config.patch16_source_root,
+                checkpoint_path=config.patch16_checkpoint_path,
+                intermediate_layers=tuple(config.patch16_intermediate_layers),
+                feature_dim=1024,
+                freeze_backbone=True,
+            )
+            self.patch16_token_proj = DepthTokenKVProjector(
+                hidden_size=1024,
+                num_heads=8,
+                head_dim=256,
+                num_groups=len(self.guided_layer_indices),
+                depth_head_indices=config.patch16_head_indices,
             )
         elif self.guided_layer_indices:
             logging.info("guided_layer_indices is set but no external encoder arm is enabled.")
@@ -283,6 +309,10 @@ class PI0Pytorch(nn.Module):
             external_features = self.sam2_module(images[0])
             token_projector = self.sam2_token_proj
             encoder_name = "SAM2"
+        elif self.use_patch16_encoder:
+            external_features = self.patch16_module(images[0])
+            token_projector = self.patch16_token_proj
+            encoder_name = self.config.patch16_encoder_kind.upper()
         else:
             return None
 

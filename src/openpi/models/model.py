@@ -52,6 +52,8 @@ _DEPTH_TOKEN_MERGING_PREFIX = "depth_module.token_merging_model."
 _DEPTH_INFERENCE_ABLATION_PREFIXES = ("depth_module.", "depth_token_proj.")
 _SAM2_TOKEN_MERGING_PREFIX = "sam2_module.token_merging_model."
 _SAM2_TOKEN_PROJ_PREFIX = "sam2_token_proj."
+_PATCH16_TOKEN_MERGING_PREFIX = "patch16_module.token_merging_model."
+_PATCH16_TOKEN_PROJ_PREFIX = "patch16_token_proj."
 
 
 def normalize_pytorch_state_dict_for_loading(
@@ -183,6 +185,20 @@ def _validate_sam2_adapter_weights_loaded(
         unexpected_keys,
         adapter_prefixes=(_SAM2_TOKEN_MERGING_PREFIX, _SAM2_TOKEN_PROJ_PREFIX),
         adapter_label="SAM2 adapter",
+    )
+
+
+def _validate_patch16_adapter_weights_loaded(
+    checkpoint_state_dict: dict[str, torch.Tensor],
+    missing_keys: list[str],
+    unexpected_keys: list[str],
+) -> None:
+    _validate_adapter_weights_loaded(
+        checkpoint_state_dict,
+        missing_keys,
+        unexpected_keys,
+        adapter_prefixes=(_PATCH16_TOKEN_MERGING_PREFIX, _PATCH16_TOKEN_PROJ_PREFIX),
+        adapter_label="Patch16 encoder adapter",
     )
 
 
@@ -492,12 +508,15 @@ class BaseModelConfig(abc.ABC):
             missing_keys, unexpected_keys = model_to_load.load_state_dict(new_state_dict, strict=False)
         _validate_depth_token_merging_weights_loaded(new_state_dict, missing_keys, unexpected_keys)
         _validate_sam2_adapter_weights_loaded(new_state_dict, missing_keys, unexpected_keys)
+        _validate_patch16_adapter_weights_loaded(new_state_dict, missing_keys, unexpected_keys)
 
         # Split missing keys into expected (new external encoders/skill modules may not be in checkpoint)
         # and unexpected.
         expected_missing, unexpected_missing = [], []
         for key in missing_keys:
-            if key.startswith(("depth", "sam2_module.", "sam2_token_proj.", "skill_head.")):
+            if key.startswith(
+                ("depth", "sam2_module.", "sam2_token_proj.", "patch16_module.", "patch16_token_proj.", "skill_head.")
+            ):
                 expected_missing.append(key)
             else:
                 unexpected_missing.append(key)
