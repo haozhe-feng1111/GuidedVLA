@@ -372,6 +372,8 @@ def compute_batch_losses(
     object_targets,
     use_object_loss: bool,
     use_skill_loss: bool,
+    noise: Tensor | None = None,
+    time: Tensor | None = None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     autocast_enabled = torch.cuda.is_available()
     autocast_device = "cuda" if autocast_enabled else "cpu"
@@ -383,6 +385,8 @@ def compute_batch_losses(
             object_targets=object_targets,
             use_object_loss=use_object_loss,
             use_skill_loss=use_skill_loss,
+            noise=noise,
+            time=time,
         )
         return main_loss, object_loss, skill_loss
 
@@ -630,6 +634,7 @@ def load_checkpoint(model, optimizer, checkpoint_dir, device):
 
     with temporarily_unwrap_compiled_modules(model, log_prefix="Loading checkpoint") as model_to_load:
         missing_keys, unexpected_keys = model_to_load.load_state_dict(state_dict, strict=False)
+    _model._validate_external_adapter_weights_loaded(state_dict, missing_keys, unexpected_keys)  # noqa: SLF001
     expected_missing_keys, unexpected_missing_keys = split_missing_keys(missing_keys)
 
     # Validate control-attention structure: config must match checkpoint.
@@ -774,6 +779,8 @@ def run_validation(
             object_targets=object_targets,
             use_object_loss=use_object_loss,
             use_skill_loss=use_skill_loss,
+            noise=torch.zeros_like(actions, dtype=torch.float32),
+            time=torch.full((actions.shape[0],), 0.5, device=actions.device, dtype=torch.float32),
         )
 
         if use_skill_loss:
@@ -968,7 +975,8 @@ def build_model(
         expert_lm_head_key = "paligemma_with_expert.gemma_expert.lm_head.weight"
         if expert_lm_head_key in state_dict:
             del state_dict[expert_lm_head_key]
-        missing_keys, _unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        _model._validate_external_adapter_weights_loaded(state_dict, missing_keys, unexpected_keys)  # noqa: SLF001
         expected_missing_keys, unexpected_missing_keys = split_missing_keys(missing_keys)
         if expected_missing_keys:
             logging.debug(f"Missing keys (expected, ignored): {expected_missing_keys}")
@@ -976,6 +984,10 @@ def build_model(
             logging.warning(f"Missing keys (unexpected): {len(unexpected_missing_keys)}")
             for k in unexpected_missing_keys:
                 logging.warning(f"  - {k}")
+        if unexpected_keys:
+            logging.warning(f"Unexpected keys when loading pretrained weights: {len(unexpected_keys)}")
+            for key in unexpected_keys:
+                logging.warning(f"  - {key}")
     elif resuming:
         logging.info("Skipping pretrained weight loading — will load from checkpoint instead")
 

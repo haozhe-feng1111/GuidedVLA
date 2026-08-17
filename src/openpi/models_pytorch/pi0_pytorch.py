@@ -912,7 +912,14 @@ class PI0Pytorch(nn.Module):
         if use_object_loss and object_targets is None:
             raise RuntimeError("Object loss requested but object_targets is missing.")
 
-        images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=True)
+        # Object targets are produced in the original image coordinates. Until
+        # geometric transforms are applied jointly to images and targets, keep
+        # object-supervised batches unaugmented. Validation is always deterministic
+        # with respect to image preprocessing through ``self.training``.
+        preprocess_for_training = self.training and not use_object_loss
+        images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(
+            observation, train=preprocess_for_training
+        )
 
         if noise is None:
             noise = self.sample_noise(actions.shape, actions.device)

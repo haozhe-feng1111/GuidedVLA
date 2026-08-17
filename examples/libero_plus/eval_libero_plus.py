@@ -709,6 +709,7 @@ def run_worker_daemon(
       - Tear down the server process tree, hard.
     """
     server_process: Optional[subprocess.Popen] = None
+    claimed_task = False
     try:
         if shutdown_event.is_set():
             return
@@ -749,6 +750,7 @@ def run_worker_daemon(
                 task = task_queue.get_nowait()
             except queue.Empty:
                 break
+            claimed_task = True
 
             task_slug = task["slug"]
             client_log_path = log_dir / f"client_{task_slug}_port_{port}.log"
@@ -780,6 +782,7 @@ def run_worker_daemon(
                 if server_process.poll() is not None:
                     print(f"[Worker GPU {gpu_id}:{port}] Server died during client run; stopping worker.")
                     task_queue.task_done()
+                    claimed_task = False
                     pbar.update(1)
                     break
             except Exception as exc:
@@ -794,9 +797,13 @@ def run_worker_daemon(
 
             pbar.update(1)
             task_queue.task_done()
+            claimed_task = False
 
     except Exception as exc:
         print(f"[Worker GPU {gpu_id}:{port}] Worker exception: {exc}")
+        if claimed_task:
+            task_queue.task_done()
+            pbar.update(1)
     finally:
         # Always tear down the server — regardless of shutdown state. The
         # original code guarded this with `if not shutdown_event.is_set()`
@@ -871,6 +878,12 @@ def monitor_and_dispatch(args: Args, checkpoint_dir: str, gpu_ids: list[int], pb
         time.sleep(args.check_interval_sec if not spawned_this_round else 1.0)
 
 
+def _ensure_output_dir_unused(path: pathlib.Path) -> None:
+    """Allow a launcher-created empty directory, but never reuse prior outputs."""
+    if path.exists() and any(path.iterdir()):
+        raise FileExistsError(f"Refusing to reuse non-empty evaluation output directory: {path}")
+
+
 def _validate_args(args: Args) -> str:
     if not args.checkpoint_dir:
         raise ValueError(
@@ -907,9 +920,15 @@ def _validate_args(args: Args) -> str:
     if args.estimated_worker_vram_gb <= 0:
         raise ValueError("estimated_worker_vram_gb must be > 0")
 
-    pathlib.Path(args.log_dir).mkdir(parents=True, exist_ok=True)
-    pathlib.Path(args.results_base_dir).mkdir(parents=True, exist_ok=True)
-    pathlib.Path(args.video_base_dir).mkdir(parents=True, exist_ok=True)
+    output_dirs = (
+        pathlib.Path(args.log_dir),
+        pathlib.Path(args.results_base_dir),
+        pathlib.Path(args.video_base_dir),
+    )
+    for output_dir in output_dirs:
+        _ensure_output_dir_unused(output_dir)
+    for output_dir in output_dirs:
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     return checkpoint_dir
 

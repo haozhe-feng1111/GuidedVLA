@@ -94,7 +94,7 @@ class Pi0Config(_model.BaseModelConfig):
     # SAM2.1 Hiera models are pretrained at this square image resolution.
     sam2_image_size: int = 1024
     # Each FPN level is resized to this square token grid before the shared 4x4 merger.
-    sam2_token_grid_size: int = 64
+    sam2_token_grid_size: int = 16
 
     # Shared frozen ViT-B/16 arm for MAE and DINOv3 encoder ablations.
     use_patch16_encoder: bool = False

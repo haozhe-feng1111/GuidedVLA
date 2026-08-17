@@ -105,6 +105,7 @@ class _TinyDepthHost(torch.nn.Module):
         super().__init__()
         self.depth_module = torch.nn.Module()
         self.depth_module.token_merging_model = torch.compile(_TinyTokenMerging(), backend="eager")
+        self.depth_token_proj = torch.nn.Linear(3, 2)
 
 
 class _TinySam2Host(torch.nn.Module):
@@ -155,7 +156,23 @@ def test_depth_adapter_guard_rejects_silent_load_failure():
     checkpoint_state_dict = _canonical_token_merging_state_dict(model)
     missing_keys, unexpected_keys = model.load_state_dict(checkpoint_state_dict, strict=False)
 
-    with pytest.raises(RuntimeError, match="depth token-merging weights"):
+    with pytest.raises(RuntimeError, match="depth adapter weights"):
+        _model._validate_depth_token_merging_weights_loaded(
+            checkpoint_state_dict,
+            missing_keys,
+            unexpected_keys,
+        )
+
+
+def test_depth_adapter_guard_rejects_missing_kv_projector_weights():
+    model = _TinyDepthHost()
+    checkpoint_state_dict = _canonical_token_merging_state_dict(model)
+    checkpoint_state_dict.pop("depth_token_proj.weight")
+
+    with _model.temporarily_unwrap_compiled_modules_for_state_dict(model) as model_to_load:
+        missing_keys, unexpected_keys = model_to_load.load_state_dict(checkpoint_state_dict, strict=False)
+
+    with pytest.raises(RuntimeError, match="depth adapter weights"):
         _model._validate_depth_token_merging_weights_loaded(
             checkpoint_state_dict,
             missing_keys,
@@ -268,7 +285,7 @@ def test_sam2_adapter_guard_rejects_missing_kv_projector_weights():
 
 
 def test_pi0_config_rejects_simultaneous_depth_and_sam2_encoders():
-    with pytest.raises(ValueError, match="mutually exclusive encoder arms"):
+    with pytest.raises(ValueError, match="mutually exclusive"):
         pi0_config.Pi0Config(
             use_depth=True,
             depth_model_name="/tmp/depth",
@@ -288,6 +305,7 @@ def test_pi0_config_accepts_sam2_encoder_arm():
         sam2_use_control=True,
     )
     assert config.sam2_head_indices == [4, 5]
+    assert config.sam2_token_grid_size == 16
 
 
 @pytest.mark.manual

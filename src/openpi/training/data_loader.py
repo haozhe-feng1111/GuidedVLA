@@ -465,23 +465,29 @@ def create_torch_data_loader(
     sampler = None
     if framework == "pytorch":
         if torch.distributed.is_initialized():
+            world_size = torch.distributed.get_world_size()
+            if batch_size % world_size != 0:
+                raise ValueError(f"Global batch size {batch_size} must be divisible by DDP world size {world_size}.")
             # For validation, we want each rank to evaluate on the same validation set
             # So we set shuffle=False and drop_last=False for validation
             is_validation = split == "val"
             sampler = torch.utils.data.distributed.DistributedSampler(
                 dataset,
-                num_replicas=torch.distributed.get_world_size(),
+                num_replicas=world_size,
                 rank=torch.distributed.get_rank(),
                 shuffle=shuffle and not is_validation,  # Don't shuffle validation data
                 drop_last=not is_validation,  # Don't drop last validation samples
             )
             # For both training and validation, divide batch size across ranks in DDP
             # This ensures consistent memory usage and proper aggregation
-            local_batch_size = batch_size // torch.distributed.get_world_size()
+            local_batch_size = batch_size // world_size
         else:
             local_batch_size = batch_size
     else:
-        local_batch_size = batch_size // jax.process_count()
+        process_count = jax.process_count()
+        if batch_size % process_count != 0:
+            raise ValueError(f"Global batch size {batch_size} must be divisible by JAX process count {process_count}.")
+        local_batch_size = batch_size // process_count
 
     logging.info(f"local_batch_size: {local_batch_size}")
 

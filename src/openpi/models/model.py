@@ -49,6 +49,7 @@ IMAGE_KEYS = (
 IMAGE_RESOLUTION = (224, 224)
 
 _DEPTH_TOKEN_MERGING_PREFIX = "depth_module.token_merging_model."
+_DEPTH_TOKEN_PROJ_PREFIX = "depth_token_proj."
 _DEPTH_INFERENCE_ABLATION_PREFIXES = ("depth_module.", "depth_token_proj.")
 _SAM2_TOKEN_MERGING_PREFIX = "sam2_module.token_merging_model."
 _SAM2_TOKEN_PROJ_PREFIX = "sam2_token_proj."
@@ -163,13 +164,13 @@ def _validate_depth_token_merging_weights_loaded(
     missing_keys: list[str],
     unexpected_keys: list[str],
 ) -> None:
-    """Fail closed when a checkpoint's trained depth token-merging weights miss loading."""
+    """Fail closed when a trained depth merger or K/V projector misses loading."""
     _validate_adapter_weights_loaded(
         checkpoint_state_dict,
         missing_keys,
         unexpected_keys,
-        adapter_prefixes=(_DEPTH_TOKEN_MERGING_PREFIX,),
-        adapter_label="depth token-merging",
+        adapter_prefixes=(_DEPTH_TOKEN_MERGING_PREFIX, _DEPTH_TOKEN_PROJ_PREFIX),
+        adapter_label="depth adapter",
     )
 
 
@@ -200,6 +201,17 @@ def _validate_patch16_adapter_weights_loaded(
         adapter_prefixes=(_PATCH16_TOKEN_MERGING_PREFIX, _PATCH16_TOKEN_PROJ_PREFIX),
         adapter_label="Patch16 encoder adapter",
     )
+
+
+def _validate_external_adapter_weights_loaded(
+    checkpoint_state_dict: dict[str, torch.Tensor],
+    missing_keys: list[str],
+    unexpected_keys: list[str],
+) -> None:
+    """Fail closed if any trained external-encoder adapter was not loaded."""
+    _validate_depth_token_merging_weights_loaded(checkpoint_state_dict, missing_keys, unexpected_keys)
+    _validate_sam2_adapter_weights_loaded(checkpoint_state_dict, missing_keys, unexpected_keys)
+    _validate_patch16_adapter_weights_loaded(checkpoint_state_dict, missing_keys, unexpected_keys)
 
 
 def filter_depth_weights_for_inference_ablation(
@@ -506,9 +518,7 @@ class BaseModelConfig(abc.ABC):
 
         with temporarily_unwrap_compiled_modules_for_state_dict(model) as model_to_load:
             missing_keys, unexpected_keys = model_to_load.load_state_dict(new_state_dict, strict=False)
-        _validate_depth_token_merging_weights_loaded(new_state_dict, missing_keys, unexpected_keys)
-        _validate_sam2_adapter_weights_loaded(new_state_dict, missing_keys, unexpected_keys)
-        _validate_patch16_adapter_weights_loaded(new_state_dict, missing_keys, unexpected_keys)
+        _validate_external_adapter_weights_loaded(new_state_dict, missing_keys, unexpected_keys)
 
         # Split missing keys into expected (new external encoders/skill modules may not be in checkpoint)
         # and unexpected.

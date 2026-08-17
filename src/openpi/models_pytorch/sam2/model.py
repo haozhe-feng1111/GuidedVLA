@@ -20,10 +20,9 @@ class Sam2Encoder(nn.Module):
 
     Inputs are GuidedVLA tensors in ``[-1, 1]``. SAM2.1 Hiera-Tiny is run at
     its native 1024px resolution. All four 256-dimensional FPN levels are
-    resized to a 64x64 grid and then passed through the same trainable 4x4
-    merger used by the DA3 arm, producing four groups of 256 1024-dimensional
-    tokens. Thus SAM2 changes the frozen visual encoder, not the injection
-    token count or GuidedVLA head layout.
+    resized to a 16x16 grid and then passed through the same trainable 4x4
+    merger used by the DA3 arm, producing four groups of 16 1024-dimensional
+    tokens. This matches the depth and Patch16 injection-token budget.
     """
 
     def __init__(
@@ -33,7 +32,7 @@ class Sam2Encoder(nn.Module):
         *,
         feature_dim: int = 1024,
         image_size: int = 1024,
-        token_grid_size: int = 64,
+        token_grid_size: int = 16,
         freeze_sam2_model: bool = True,
     ):
         super().__init__()
