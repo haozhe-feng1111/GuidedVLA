@@ -116,7 +116,9 @@ EVAL_CMD=(
     --server-python "${SERVER_PYTHON}"
     --client-python "${CLIENT_PYTHON}"
     --libero-plus-path "${LIBERO_PLUS_PATH}"
-    --max-workers-per-gpu 1
+    # A100-80GB validation showed substantially better throughput with four
+    # independent server/client pairs per GPU; VRAM gates below remain active.
+    --max-workers-per-gpu 4
     --estimated-worker-vram-gb 12
     --vram-safe-threshold 0.90
     --client-mujoco-gl "${MUJOCO_GL}"
