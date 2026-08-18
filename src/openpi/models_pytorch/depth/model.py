@@ -3,9 +3,11 @@
 import os
 import sys
 import types
+from typing import Literal
 
 import torch
 import torch.nn as nn
+from transformers import AutoModel
 
 # depth_anything_3 eagerly imports its 3DGS export utilities, which in turn try to
 # import `gsplat`. We don't use 3DGS rendering, so register a lightweight stub before
@@ -26,26 +28,43 @@ _IMAGENET_STD = [0.229, 0.224, 0.225]
 
 class DepthEncoder(nn.Module):
     """
-    Wraps Depth Anything 3 (DA3-SMALL) to produce multi-scale patch tokens
-    for downstream cross-attention.
+    Wraps a frozen DA3-SMALL or DINOv2-Base encoder to produce patch tokens.
 
     Input:  [B, 3, H, W] images in [-1, 1]
     Output: tuple of 4 tensors, each [B, N_merged, feature_dim]
     """
 
-    def __init__(self, depth_model_name, feature_dim=1024, freeze_depth_model=True):
+    def __init__(
+        self,
+        depth_model_name,
+        feature_dim=1024,
+        freeze_depth_model=True,
+        depth_encoder_type: Literal["da3", "dinov2_base"] = "da3",
+    ):
         super().__init__()
 
         depth_model_name = os.environ.get("OPENPI_DEPTH_MODEL_PATH", depth_model_name)
-        self.da3_model = DepthAnything3.from_pretrained(depth_model_name)
-        self.da3_model.eval()
+        self.depth_encoder_type = depth_encoder_type
+        if self.depth_encoder_type == "da3":
+            self.da3_model = DepthAnything3.from_pretrained(depth_model_name)
+            self.da3_model.eval()
+            embed_dim = self.da3_model.model.backbone.pretrained.embed_dim
+        elif self.depth_encoder_type == "dinov2_base":
+            self.dinov2_model = AutoModel.from_pretrained(
+                depth_model_name,
+                local_files_only=True,
+                trust_remote_code=False,
+            )
+            if self.dinov2_model.config.model_type != "dinov2":
+                raise ValueError("depth_encoder_type='dinov2_base' requires a DINOv2 checkpoint")
+            self.dinov2_model.eval()
+            embed_dim = self.dinov2_model.config.hidden_size
+        else:
+            raise ValueError("depth_encoder_type must be 'da3' or 'dinov2_base'")
 
         if freeze_depth_model:
             self._freeze_depth_model()
 
-        # Read the backbone embed_dim from the loaded model instead of hardcoding
-        # 384 (ViT-S). This handles ViT-L (1024) or any other backbone size.
-        embed_dim = self.da3_model.model.backbone.pretrained.embed_dim
         self.token_merging_model = TokenMerging2D(patch_size=4, in_dim=embed_dim, out_dim=feature_dim)
         self.feature_dim = feature_dim
         self.freeze_depth_model = freeze_depth_model
@@ -79,18 +98,21 @@ class DepthEncoder(nn.Module):
     # Weight management helpers
     # ------------------------------------------------------------------
 
+    def _encoder_model(self):
+        return self.da3_model if self.depth_encoder_type == "da3" else self.dinov2_model
+
     def _freeze_depth_model(self):
-        for param in self.da3_model.parameters():
+        for param in self._encoder_model().parameters():
             param.requires_grad = False
-        self.da3_model.eval()
+        self._encoder_model().eval()
 
     def freeze_unused_weight(self):
         self._freeze_depth_model()
 
     def unfreeze_depth_model(self):
-        for param in self.da3_model.parameters():
+        for param in self._encoder_model().parameters():
             param.requires_grad = True
-        self.da3_model.train()
+        self._encoder_model().train()
 
     # ------------------------------------------------------------------
     # Core inference
@@ -106,6 +128,11 @@ class DepthEncoder(nn.Module):
         Returns:
             Tuple of 4 tensors, each [B, N_patches, embed_dim].
         """
+        if self.depth_encoder_type == "dinov2_base":
+            if output.hidden_states is None:
+                raise RuntimeError("DINOv2 did not return hidden states")
+            return tuple(output.hidden_states[layer_idx + 1][:, 1:, :].clone() for layer_idx in _FEAT_LAYERS)
+
         result = []
         for layer_idx in _FEAT_LAYERS:
             feat = output.aux[f"feat_layer_{layer_idx}"]  # [B, 1, H, W, C]
@@ -129,10 +156,11 @@ class DepthEncoder(nn.Module):
         batch_size = images.shape[0]
         x = (images + 1.0) * 0.5  # [-1, 1] → [0, 1]
         x = (x - self.img_mean) / self.img_std  # ImageNet normalize
-        x = x.unsqueeze(1)  # [B, 1, C, H, W] — DA3 format
-
         with torch.no_grad():
-            output = self.da3_model.forward(x, export_feat_layers=_FEAT_LAYERS)
+            if self.depth_encoder_type == "da3":
+                output = self.da3_model.forward(x.unsqueeze(1), export_feat_layers=_FEAT_LAYERS)
+            else:
+                output = self.dinov2_model(pixel_values=x, output_hidden_states=True, return_dict=True)
 
         layer_features = self._extract_layer_features(output, batch_size)
 

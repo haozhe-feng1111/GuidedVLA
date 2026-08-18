@@ -136,6 +136,31 @@ def test_attn_path_guided_proposal_f_direct_probs_assignment_is_numerically_exac
     torch.testing.assert_close(output_heads_first[:, :distill_heads], ref_attn, rtol=1e-5, atol=1e-6)
 
 
+def test_attn_path_guided_casts_depth_output_to_main_dtype():
+    query = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
+    key = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
+    value = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
+    depth_key = torch.randn(1, 2, 4, 8, dtype=torch.float32)
+    depth_value = torch.randn(1, 2, 4, 8, dtype=torch.float32)
+
+    output, _ = attn_path_guided(
+        query,
+        key,
+        value,
+        attention_mask=None,
+        scaling=1.0,
+        dropout_p=0.0,
+        distill_heads=0,
+        training=False,
+        depth_token_k=depth_key,
+        depth_token_v=depth_value,
+        depth_head_indices=(0, 1),
+    )
+
+    assert output.dtype == torch.bfloat16
+    assert output.shape == (1, 4, 2, 8)
+
+
 def test_run_sdpa_casts_additive_mask_to_query_dtype():
     query = torch.randn(1, 2, 3, 4, dtype=torch.float32)
     key = torch.randn(1, 2, 5, 4, dtype=torch.float32)

@@ -232,7 +232,7 @@ def attn_path_guided(
             dropout_p,
             scaling,
         )
-        attn_output[:, depth_heads] = depth_out
+        attn_output[:, depth_heads] = depth_out.to(dtype=attn_output.dtype)
 
     return attn_output.transpose(1, 2).contiguous(), attention_probs
 

@@ -74,6 +74,7 @@ class Pi0Config(_model.BaseModelConfig):
     # checkpoint still has to declare ``use_depth=True``; the PyTorch runtime
     # then omits the depth branch and its checkpoint weights explicitly.
     disable_depth_at_inference: bool = False
+    depth_encoder_type: Literal["da3", "dinov2_base"] = "da3"
     depth_model_name: str = None
     depth_head_indices: list[int] = field(default_factory=lambda: [4])
     # Whether depth attention modifications should be applied to the control branch.
@@ -121,6 +122,9 @@ class Pi0Config(_model.BaseModelConfig):
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
         if self.discrete_state_input is None:
             object.__setattr__(self, "discrete_state_input", self.pi05)
+
+        if self.depth_encoder_type not in ("da3", "dinov2_base"):
+            raise ValueError("depth_encoder_type must be 'da3' or 'dinov2_base'")
 
         # Control-branch sanity checks.
         enabled_external_encoders = sum((self.use_depth, self.use_sam2, self.use_patch16_encoder))

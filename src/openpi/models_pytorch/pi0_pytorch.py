@@ -200,7 +200,10 @@ class PI0Pytorch(nn.Module):
         self.use_patch16_encoder = config.use_patch16_encoder
         if self.use_depth:
             self.depth_module = DepthEncoder(
-                depth_model_name=config.depth_model_name, feature_dim=1024, freeze_depth_model=True
+                depth_model_name=config.depth_model_name,
+                feature_dim=1024,
+                freeze_depth_model=True,
+                depth_encoder_type=config.depth_encoder_type,
             )
             self.depth_token_proj = DepthTokenKVProjector(
                 hidden_size=1024,

@@ -174,9 +174,9 @@ echo "Task suites: ${GUIDEDVLA_TASK_SUITES:-ALL}"
 echo "Categories: ${GUIDEDVLA_CATEGORIES:-ALL}"
 echo "Task IDs: ${GUIDEDVLA_TASK_IDS:-ALL}"
 if [[ "${REQUIRE_DEPTH_ASSETS}" == "1" ]]; then
-    echo "DA3-SMALL: ${DEPTH_MODEL}"
+    echo "External encoder: ${DEPTH_MODEL}"
 else
-    echo "DA3-SMALL: intentionally not required for this policy config"
+    echo "External encoder: intentionally not required for this policy config"
 fi
 echo "MuJoCo backend: ${MUJOCO_GL}"
 

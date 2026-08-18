@@ -210,6 +210,21 @@ def _build_task_list(args: Args) -> list[dict]:
                     "slug": suite,
                 }
             )
+
+    if categories:
+        classification_path = (
+            pathlib.Path(args.libero_plus_path) / "libero" / "libero" / "benchmark" / "task_classification.json"
+        )
+        with open(classification_path, encoding="utf-8") as f:
+            classification = json.load(f)
+
+        task_counts = {
+            (suite, category): sum(1 for task in classification[suite] if task.get("category") == category)
+            for suite in suites
+            for category in categories
+        }
+        tasks.sort(key=lambda task: task_counts[(task["suite"], task["category"])], reverse=True)
+
     return tasks
 
 
