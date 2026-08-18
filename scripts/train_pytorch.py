@@ -631,6 +631,11 @@ def load_checkpoint(model, optimizer, checkpoint_dir, device):
 
     state_dict = safetensors.torch.load_file(safetensors_path, device=str(device))
     state_dict = normalize_state_dict_for_loading(state_dict, source_label="checkpoint")
+    model_config = unwrap_model(model).config
+    _model._validate_depth_encoder_checkpoint_type(  # noqa: SLF001
+        state_dict,
+        depth_encoder_type=model_config.depth_encoder_type,
+    )
 
     with temporarily_unwrap_compiled_modules(model, log_prefix="Loading checkpoint") as model_to_load:
         missing_keys, unexpected_keys = model_to_load.load_state_dict(state_dict, strict=False)
@@ -806,7 +811,7 @@ def run_validation(
                 valid_mask = None
 
             if targets is not None and valid_mask is not None and valid_mask.any():
-                skill_logits = model_core.compute_skill_logits_for_infer(observation, device, deterministic=False)
+                skill_logits = model_core.compute_skill_logits_for_infer(observation, device, deterministic=True)
                 predictions = skill_logits.argmax(dim=-1)[valid_mask]
                 targets = targets[valid_mask]
                 total_skill_correct += (predictions == targets).sum().item()
@@ -975,6 +980,10 @@ def build_model(
         expert_lm_head_key = "paligemma_with_expert.gemma_expert.lm_head.weight"
         if expert_lm_head_key in state_dict:
             del state_dict[expert_lm_head_key]
+        _model._validate_depth_encoder_checkpoint_type(  # noqa: SLF001
+            state_dict,
+            depth_encoder_type=runtime_model_config.depth_encoder_type,
+        )
         missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
         _model._validate_external_adapter_weights_loaded(state_dict, missing_keys, unexpected_keys)  # noqa: SLF001
         expected_missing_keys, unexpected_missing_keys = split_missing_keys(missing_keys)

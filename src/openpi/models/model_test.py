@@ -180,6 +180,43 @@ def test_depth_adapter_guard_rejects_missing_kv_projector_weights():
         )
 
 
+@pytest.mark.parametrize(
+    ("depth_encoder_type", "checkpoint_prefix"),
+    [
+        ("da3", "depth_module.da3_model."),
+        ("dinov2_base", "depth_module.dinov2_model."),
+    ],
+)
+def test_depth_encoder_checkpoint_type_accepts_matching_backbone(depth_encoder_type, checkpoint_prefix):
+    _model._validate_depth_encoder_checkpoint_type(
+        {f"{checkpoint_prefix}weight": torch.ones(1)},
+        depth_encoder_type=depth_encoder_type,
+    )
+
+
+def test_depth_encoder_checkpoint_type_allows_stage1_initialization():
+    _model._validate_depth_encoder_checkpoint_type({}, depth_encoder_type="dinov2_base")
+
+
+def test_depth_encoder_checkpoint_type_rejects_mismatch():
+    with pytest.raises(RuntimeError, match="checkpoint/config mismatch"):
+        _model._validate_depth_encoder_checkpoint_type(
+            {"depth_module.da3_model.weight": torch.ones(1)},
+            depth_encoder_type="dinov2_base",
+        )
+
+
+def test_depth_encoder_checkpoint_type_rejects_mixed_backbones():
+    with pytest.raises(RuntimeError, match="checkpoint/config mismatch"):
+        _model._validate_depth_encoder_checkpoint_type(
+            {
+                "depth_module.da3_model.weight": torch.ones(1),
+                "depth_module.dinov2_model.weight": torch.ones(1),
+            },
+            depth_encoder_type="da3",
+        )
+
+
 def test_depth_inference_ablation_is_noop_by_default():
     state_dict = {"depth_module.encoder.weight": torch.ones(1)}
 

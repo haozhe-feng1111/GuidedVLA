@@ -218,8 +218,21 @@ def _build_task_list(args: Args) -> list[dict]:
         with open(classification_path, encoding="utf-8") as f:
             classification = json.load(f)
 
+        def normalize_category(value: str) -> str:
+            return " ".join(str(value).strip().split()).casefold()
+
+        missing_suites = [suite for suite in suites if suite not in classification]
+        if missing_suites:
+            raise RuntimeError(
+                f"No task classification entries found for suite(s) {missing_suites} in {classification_path}."
+            )
+
         task_counts = {
-            (suite, category): sum(1 for task in classification[suite] if task.get("category") == category)
+            (suite, category): sum(
+                1
+                for task in classification[suite]
+                if normalize_category(task.get("category", "")) == normalize_category(category)
+            )
             for suite in suites
             for category in categories
         }

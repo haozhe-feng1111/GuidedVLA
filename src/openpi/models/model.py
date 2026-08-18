@@ -51,6 +51,10 @@ IMAGE_RESOLUTION = (224, 224)
 _DEPTH_TOKEN_MERGING_PREFIX = "depth_module.token_merging_model."
 _DEPTH_TOKEN_PROJ_PREFIX = "depth_token_proj."
 _DEPTH_INFERENCE_ABLATION_PREFIXES = ("depth_module.", "depth_token_proj.")
+_DEPTH_ENCODER_PREFIXES = {
+    "da3": "depth_module.da3_model.",
+    "dinov2_base": "depth_module.dinov2_model.",
+}
 _SAM2_TOKEN_MERGING_PREFIX = "sam2_module.token_merging_model."
 _SAM2_TOKEN_PROJ_PREFIX = "sam2_token_proj."
 _PATCH16_TOKEN_MERGING_PREFIX = "patch16_module.token_merging_model."
@@ -172,6 +176,30 @@ def _validate_depth_token_merging_weights_loaded(
         adapter_prefixes=(_DEPTH_TOKEN_MERGING_PREFIX, _DEPTH_TOKEN_PROJ_PREFIX),
         adapter_label="depth adapter",
     )
+
+
+def _validate_depth_encoder_checkpoint_type(
+    checkpoint_state_dict: dict[str, torch.Tensor],
+    *,
+    depth_encoder_type: str,
+) -> None:
+    """Fail closed when checkpointed depth-backbone weights do not match the configured encoder."""
+    if depth_encoder_type not in _DEPTH_ENCODER_PREFIXES:
+        raise ValueError(f"Unsupported depth_encoder_type: {depth_encoder_type!r}")
+
+    checkpoint_encoder_types = [
+        encoder_type
+        for encoder_type, prefix in _DEPTH_ENCODER_PREFIXES.items()
+        if any(key.startswith(prefix) for key in checkpoint_state_dict)
+    ]
+    if not checkpoint_encoder_types:
+        # Stage-1 initialization checkpoints intentionally contain no external encoder.
+        return
+    if checkpoint_encoder_types != [depth_encoder_type]:
+        raise RuntimeError(
+            "Depth encoder checkpoint/config mismatch: "
+            f"checkpoint contains {checkpoint_encoder_types}, config requests {depth_encoder_type!r}."
+        )
 
 
 def _validate_sam2_adapter_weights_loaded(
@@ -514,6 +542,10 @@ class BaseModelConfig(abc.ABC):
         new_state_dict = filter_depth_weights_for_inference_ablation(
             new_state_dict,
             enabled=depth_disabled_at_inference,
+        )
+        _validate_depth_encoder_checkpoint_type(
+            new_state_dict,
+            depth_encoder_type=model_config.depth_encoder_type,
         )
 
         with temporarily_unwrap_compiled_modules_for_state_dict(model) as model_to_load:

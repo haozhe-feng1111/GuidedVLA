@@ -122,7 +122,7 @@ cd "${PROJECT_ROOT}"
         --model.sam2-model-config "${SAM2_CONFIG}" \
         --model.sam2-checkpoint-path "${SAM2_CHECKPOINT}" \
         --model.sam2-image-size 1024 \
-        --model.sam2-token-grid-size 64 \
+        --model.sam2-token-grid-size 16 \
         --batch-size 16 \
         --gradient-accumulation-steps 4 \
         --num-workers 2 \

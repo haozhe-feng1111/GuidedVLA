@@ -43,6 +43,45 @@ def test_build_task_list_sorts_largest_categories_first(tmp_path: pathlib.Path):
     ]
 
 
+def test_build_task_list_normalizes_category_names_for_lpt_counts(tmp_path: pathlib.Path):
+    classification_path = tmp_path / "libero" / "libero" / "benchmark" / "task_classification.json"
+    classification_path.parent.mkdir(parents=True)
+    classification_path.write_text(
+        json.dumps(
+            {
+                "suite_a": [
+                    {"category": "  Robot   Initial States "},
+                    {"category": "robot initial states"},
+                    {"category": "sensor noise"},
+                ]
+            }
+        )
+    )
+    args = eval_libero_plus.Args(
+        libero_plus_path=str(tmp_path),
+        task_suites="suite_a",
+        categories="Sensor Noise,ROBOT INITIAL STATES",
+    )
+
+    tasks = eval_libero_plus._build_task_list(args)
+
+    assert [task["category"] for task in tasks] == ["ROBOT INITIAL STATES", "Sensor Noise"]
+
+
+def test_build_task_list_rejects_unknown_classification_suite(tmp_path: pathlib.Path):
+    classification_path = tmp_path / "libero" / "libero" / "benchmark" / "task_classification.json"
+    classification_path.parent.mkdir(parents=True)
+    classification_path.write_text(json.dumps({"suite_a": []}))
+    args = eval_libero_plus.Args(
+        libero_plus_path=str(tmp_path),
+        task_suites="missing_suite",
+        categories="Sensor Noise",
+    )
+
+    with pytest.raises(RuntimeError, match="missing_suite"):
+        eval_libero_plus._build_task_list(args)
+
+
 def test_output_dir_guard_allows_missing_or_empty_directory(tmp_path: pathlib.Path):
     output_dir = tmp_path / "new-run"
     eval_libero_plus._ensure_output_dir_unused(output_dir)
