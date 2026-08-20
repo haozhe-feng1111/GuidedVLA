@@ -424,3 +424,64 @@ def test_pi0_config_defaults_to_mean_heads_object_loss_aggregation():
 def test_pi0_config_rejects_unknown_object_loss_aggregation():
     with pytest.raises(ValueError, match="object_loss_head_aggregation"):
         pi0_config.Pi0Config(object_loss_head_aggregation="unknown")
+
+
+def test_depth_guided_layers_default_to_supervision_layers():
+    config = pi0_config.Pi0Config(guided_layer_indices=[12, 9, 11, 10])
+
+    assert config.guided_layer_indices == [9, 10, 11, 12]
+    assert config.depth_guided_layer_indices == [9, 10, 11, 12]
+
+
+def test_depth_guided_layers_can_be_decoupled_from_supervision_layers():
+    config = pi0_config.Pi0Config(
+        guided_layer_indices=[9, 10, 11, 12],
+        depth_guided_layer_indices=[8, 5, 7, 6],
+    )
+
+    assert config.guided_layer_indices == [9, 10, 11, 12]
+    assert config.depth_guided_layer_indices == [5, 6, 7, 8]
+
+
+def test_dinov2_shallow_guidance_config_only_moves_external_kv_layers():
+    from openpi.training import config as training_config
+
+    config = training_config.get_config("pi0_libero_object_dinov2_base_skill_shallow_guidance").model
+
+    assert config.guided_layer_indices == [9, 10, 11, 12]
+    assert config.depth_guided_layer_indices == [5, 6, 7, 8]
+    assert config.object_head_indices == [0, 1]
+    assert config.depth_head_indices == [4, 5]
+    assert config.skill_head_indices == [6, 7]
+
+
+def test_joint_backbone_routes_external_kv_to_depth_guided_layers():
+    captured = {}
+
+    def fake_backbone(**kwargs):
+        captured.update(kwargs)
+        return (None, kwargs["inputs_embeds"][1]), None, []
+
+    model = object.__new__(PI0Pytorch)
+    object.__setattr__(model, "paligemma_with_expert", fake_backbone)
+    object.__setattr__(model, "guided_layer_indices", (9, 10, 11, 12))
+    object.__setattr__(model, "depth_guided_layer_indices", (5, 6, 7, 8))
+    prefix_embs = torch.zeros(1, 2, 4)
+    suffix_embs = torch.zeros(1, 3, 4)
+    depth_kv = (object(),) * 4
+
+    suffix_out, supervised_states = model.run_joint_backbone(
+        prefix_embs=prefix_embs,
+        suffix_embs=suffix_embs,
+        attention_mask_4d=torch.zeros(1, 1, 5, 5),
+        position_ids=torch.arange(5).unsqueeze(0),
+        adarms_cond=None,
+        depth_kv=depth_kv,
+        head_supervision_config=None,
+    )
+
+    assert model.get_guided_layers() == [9, 10, 11, 12]
+    assert captured["guided_layer_indices"] == (5, 6, 7, 8)
+    assert captured["depth_kv"] is depth_kv
+    assert suffix_out is suffix_embs
+    assert supervised_states == []

@@ -846,7 +846,8 @@ _CONFIGS = [
         # sites from policy layers [9, 10, 11, 12] to [5, 6, 7, 8].
         name="pi0_libero_object_dinov2_base_skill_shallow_guidance",
         model=pi0_config.Pi0Config(
-            guided_layer_indices=[5, 6, 7, 8],
+            guided_layer_indices=[9, 10, 11, 12],
+            depth_guided_layer_indices=[5, 6, 7, 8],
             control_attention_enabled=True,
             control_attention_num_heads=8,
             use_object_loss=True,

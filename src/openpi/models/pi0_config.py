@@ -36,8 +36,11 @@ class Pi0Config(_model.BaseModelConfig):
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
 
-    # Shared transformer layers used by object, skill, and depth guidance.
+    # Transformer layers used by object and skill head supervision.
     guided_layer_indices: list[int] = field(default_factory=lambda: [9, 10, 11, 12])
+    # Transformer layers where external-encoder K/V guidance is injected.
+    # None preserves the historical behavior by inheriting guided_layer_indices.
+    depth_guided_layer_indices: list[int] | None = None
 
     # Enable ControlNet-style attention (dual-branch, zero_conv fusion) on the action expert.
     control_attention_enabled: bool = False
@@ -201,6 +204,16 @@ class Pi0Config(_model.BaseModelConfig):
         if len(set(self.guided_layer_indices)) != len(self.guided_layer_indices):
             raise ValueError("guided_layer_indices contains duplicate entries")
         object.__setattr__(self, "guided_layer_indices", sorted(self.guided_layer_indices))
+        depth_guided_layer_indices = self.depth_guided_layer_indices
+        if depth_guided_layer_indices is None:
+            depth_guided_layer_indices = list(self.guided_layer_indices)
+        if any(idx < 0 for idx in depth_guided_layer_indices):
+            raise ValueError("depth_guided_layer_indices must contain non-negative indices")
+        if len(depth_guided_layer_indices) != 4:
+            raise ValueError("depth_guided_layer_indices must contain exactly 4 layer indices")
+        if len(set(depth_guided_layer_indices)) != len(depth_guided_layer_indices):
+            raise ValueError("depth_guided_layer_indices contains duplicate entries")
+        object.__setattr__(self, "depth_guided_layer_indices", sorted(depth_guided_layer_indices))
         if self.skill_num_classes <= 0:
             raise ValueError("skill_num_classes must be positive")
         if self.use_skill_loss and len(self.skill_head_indices) == 0:

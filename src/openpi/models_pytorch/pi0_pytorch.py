@@ -115,9 +115,11 @@ class PI0Pytorch(nn.Module):
         object_head_indices = getattr(config, "object_head_indices", None)
         skill_head_indices = getattr(config, "skill_head_indices", None)
         guided_layer_indices = getattr(config, "guided_layer_indices", None)
+        depth_guided_layer_indices = getattr(config, "depth_guided_layer_indices", None)
         self.object_head_indices = tuple(object_head_indices or [])
         self.skill_head_indices = tuple(skill_head_indices or [])
         self.guided_layer_indices = tuple(guided_layer_indices or [])
+        self.depth_guided_layer_indices = tuple(depth_guided_layer_indices or self.guided_layer_indices)
         self.object_use_control = bool(getattr(config, "object_use_control", True))
         self.use_depth = bool(getattr(config, "use_depth", False))
         self.use_sam2 = bool(getattr(config, "use_sam2", False))
@@ -209,7 +211,7 @@ class PI0Pytorch(nn.Module):
                 hidden_size=1024,
                 num_heads=8,
                 head_dim=256,
-                num_groups=len(self.guided_layer_indices),
+                num_groups=len(self.depth_guided_layer_indices),
                 depth_head_indices=config.depth_head_indices,
             )
         elif config.use_depth:
@@ -229,7 +231,7 @@ class PI0Pytorch(nn.Module):
                 hidden_size=1024,
                 num_heads=8,
                 head_dim=256,
-                num_groups=len(self.guided_layer_indices),
+                num_groups=len(self.depth_guided_layer_indices),
                 depth_head_indices=config.sam2_head_indices,
             )
         elif self.use_patch16_encoder:
@@ -245,11 +247,11 @@ class PI0Pytorch(nn.Module):
                 hidden_size=1024,
                 num_heads=8,
                 head_dim=256,
-                num_groups=len(self.guided_layer_indices),
+                num_groups=len(self.depth_guided_layer_indices),
                 depth_head_indices=config.patch16_head_indices,
             )
-        elif self.guided_layer_indices:
-            logging.info("guided_layer_indices is set but no external encoder arm is enabled.")
+        elif self.depth_guided_layer_indices:
+            logging.info("depth_guided_layer_indices is set but no external encoder arm is enabled.")
 
         num_patches = 256
         indices_list = []
@@ -296,11 +298,11 @@ class PI0Pytorch(nn.Module):
         return self.paligemma_with_expert.use_gradient_checkpointing
 
     def get_guided_layers(self) -> list[int]:
-        """Shared layers used by object, skill, and depth guidance."""
+        """Layers used by object and skill head supervision."""
         return list(self.guided_layer_indices)
 
     def get_distill_layers(self) -> list[int]:
-        """Backward-compatible alias for the shared guided layers."""
+        """Backward-compatible alias for object and skill supervision layers."""
         return self.get_guided_layers()
 
     def compute_depth_key_values(self, images):
@@ -320,10 +322,10 @@ class PI0Pytorch(nn.Module):
             return None
 
         depth_kv = token_projector(external_features)
-        if len(depth_kv) != len(self.guided_layer_indices):
+        if len(depth_kv) != len(self.depth_guided_layer_indices):
             raise RuntimeError(
-                f"{encoder_name} projector output count does not match guided_layer_indices. "
-                f"Expected {len(self.guided_layer_indices)}, got {len(depth_kv)}."
+                f"{encoder_name} projector output count does not match depth_guided_layer_indices. "
+                f"Expected {len(self.depth_guided_layer_indices)}, got {len(depth_kv)}."
             )
         return depth_kv
 
@@ -614,13 +616,19 @@ class PI0Pytorch(nn.Module):
         else:
             layer_indices = self.get_distill_layers() if self.config.control_attention_distill_only else None
 
-        if layer_indices is not None and (self.object_use_control or self.skill_use_control or self.depth_use_control):
-            required_guided_layers = set(self.guided_layer_indices)
+        if layer_indices is not None and (
+            self.object_use_control or self.skill_use_control or self.external_kv_use_control
+        ):
+            required_guided_layers = set()
+            if self.object_use_control or self.skill_use_control:
+                required_guided_layers.update(self.guided_layer_indices)
+            if self.external_kv_use_control:
+                required_guided_layers.update(self.depth_guided_layer_indices)
             missing_guided_layers = sorted(required_guided_layers - set(layer_indices))
             if missing_guided_layers:
                 raise ValueError(
-                    "ControlAttention must be injected into every guided layer when "
-                    "object_use_control, skill_use_control, or depth_use_control is enabled. "
+                    "ControlAttention must be injected into every required object, skill, "
+                    "or external K/V guided layer when its control branch is enabled. "
                     f"Missing guided layers: {missing_guided_layers}"
                 )
 
@@ -737,7 +745,7 @@ class PI0Pytorch(nn.Module):
                 use_cache=False,
                 adarms_cond=[None, adarms_cond_],
                 head_supervision_config=head_supervision_config_,
-                guided_layer_indices=self.guided_layer_indices,
+                guided_layer_indices=self.depth_guided_layer_indices,
                 depth_kv=depth_kv,
             )
             return suffix_out, all_supervised_states
@@ -1106,7 +1114,7 @@ class PI0Pytorch(nn.Module):
             inputs_embeds=[None, suffix_embs],
             use_cache=False,
             adarms_cond=[None, adarms_cond],
-            guided_layer_indices=self.guided_layer_indices,
+            guided_layer_indices=self.depth_guided_layer_indices,
             depth_kv=depth_kv,
         )
 
