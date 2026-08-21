@@ -1,0 +1,39 @@
+diff --git a/scripts/train_pytorch.py b/scripts/train_pytorch.py
+index f23cc98..c60dc7a 100644
+--- a/scripts/train_pytorch.py
++++ b/scripts/train_pytorch.py
+@@ -518,4 +518,7 @@ def save_checkpoint(model, optimizer, global_step, config, is_main, data_config):
+     """Save a checkpoint with model state, optimizer state, and metadata."""
++    if os.environ.get("GUIDEDVLA_DIAGNOSTIC_SKIP_CHECKPOINT", "0").lower() in {"1", "true", "yes", "on"}:
++        return
++
+     if not is_main:
+         return
+ 
+@@ -1353,7 +1356,26 @@ def train_loop(
+             (total_loss / config.gradient_accumulation_steps).backward()
+ 
+         grad_norm = None
+         if completes_optimizer_step:
++            if (
++                current_step == 0
++                and is_main
++                and os.environ.get("GUIDEDVLA_REPORT_UNUSED_PARAMS", "0").lower()
++                in {"1", "true", "yes", "on"}
++            ):
++                inner_model = model.module if hasattr(model, "module") else model
++                trainable = [(name, param) for name, param in inner_model.named_parameters() if param.requires_grad]
++                unused = [(name, param) for name, param in trainable if param.grad is None]
++                logging.info(
++                    "DDP gradient audit after final accumulation backward: trainable_tensors=%d, "
++                    "unused_tensors=%d, unused_numel=%d",
++                    len(trainable),
++                    len(unused),
++                    sum(param.numel() for _, param in unused),
++                )
++                for name, param in unused:
++                    logging.info("DDP unused parameter: %s shape=%s", name, tuple(param.shape))
++
+             if current_step < _EARLY_MEMORY_LOG_STEPS and is_main and torch.cuda.is_available():
+                 log_memory_usage(device, current_step, "after_backward")
+ 

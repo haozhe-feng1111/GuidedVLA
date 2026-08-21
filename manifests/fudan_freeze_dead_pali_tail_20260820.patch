@@ -1,0 +1,44 @@
+diff --git a/scripts/train_pytorch.py b/scripts/train_pytorch.py
+index c60dc7a..b9db6d2 100644
+--- a/scripts/train_pytorch.py
++++ b/scripts/train_pytorch.py
+@@ -961,6 +961,39 @@ def create_model(config, device, use_ddp, local_rank, world_size):
+             logging.warning("Config requested gradient checkpointing but this model does not support it")
+         enable_gc = False
+ 
++    if os.environ.get("GUIDEDVLA_FREEZE_DEAD_PALI_TAIL", "0").lower() in {"1", "true", "yes", "on"}:
++        num_layers = model.paligemma_with_expert.paligemma.config.text_config.num_hidden_layers
++        last_layer_prefix = (
++            "paligemma_with_expert.paligemma.model.language_model.layers."
++            f"{num_layers - 1}."
++        )
++        expected_names = {
++            f"{last_layer_prefix}self_attn.o_proj.weight",
++            f"{last_layer_prefix}mlp.gate_proj.weight",
++            f"{last_layer_prefix}mlp.up_proj.weight",
++            f"{last_layer_prefix}mlp.down_proj.weight",
++            f"{last_layer_prefix}post_attention_layernorm.weight",
++            "paligemma_with_expert.paligemma.model.language_model.norm.weight",
++        }
++        frozen_names = set()
++        frozen_numel = 0
++        for name, param in model.named_parameters():
++            if name in expected_names:
++                param.requires_grad = False
++                frozen_names.add(name)
++                frozen_numel += param.numel()
++        missing_names = expected_names - frozen_names
++        if missing_names:
++            raise RuntimeError(
++                "Could not freeze the structurally dead PaliGemma tail parameters: "
++                f"missing={sorted(missing_names)}"
++            )
++        logging.info(
++            "Froze structurally dead PaliGemma tail before DDP: tensors=%d, numel=%d",
++            len(frozen_names),
++            frozen_numel,
++        )
++
+     if torch.cuda.is_available():
+         torch.backends.cudnn.benchmark = True
+         torch.backends.cuda.matmul.allow_tf32 = True
