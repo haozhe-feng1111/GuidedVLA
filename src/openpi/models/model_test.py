@@ -345,6 +345,31 @@ def test_pi0_config_accepts_sam2_encoder_arm():
     assert config.sam2_token_grid_size == 16
 
 
+def test_pi0_config_accepts_wan22_encoder_arm():
+    config = pi0_config.Pi0Config(
+        control_attention_enabled=True,
+        use_wan22_encoder=True,
+        wan22_source_root="/tmp/Wan2.2",
+        wan22_checkpoint_path="/tmp/Wan2.2_VAE.pth",
+        wan22_head_indices=[4, 5],
+        wan22_use_control=True,
+    )
+    assert config.wan22_head_indices == [4, 5]
+    assert config.wan22_dtype == "bfloat16"
+
+
+def test_pi0_config_rejects_simultaneous_patch16_and_wan22_encoders():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        pi0_config.Pi0Config(
+            use_patch16_encoder=True,
+            patch16_encoder_kind="mae",
+            patch16_checkpoint_path="/tmp/mae.pth",
+            use_wan22_encoder=True,
+            wan22_source_root="/tmp/Wan2.2",
+            wan22_checkpoint_path="/tmp/Wan2.2_VAE.pth",
+        )
+
+
 @pytest.mark.manual
 def test_model_restore():
     key = jax.random.key(0)

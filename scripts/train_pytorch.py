@@ -457,6 +457,8 @@ _EXPECTED_ADAPTER_MISSING_KEY_PREFIXES = (
     "sam2_token_proj.",
     "patch16_module.",
     "patch16_token_proj.",
+    "wan22_module.",
+    "wan22_token_proj.",
     "skill_head.",
 )
 
@@ -468,6 +470,7 @@ _NEW_HEAD_PARAM_NAME_MARKERS = (
     "depth_token_proj",
     "sam2_token_proj",
     "patch16_token_proj",
+    "wan22_token_proj",
     "token_merging_model",
 )
 
@@ -496,6 +499,7 @@ def _guided_training_config_enabled(model_config) -> bool:
             getattr(model_config, "use_depth", False),
             getattr(model_config, "use_sam2", False),
             getattr(model_config, "use_patch16_encoder", False),
+            getattr(model_config, "use_wan22_encoder", False),
             getattr(model_config, "use_skill_loss", False),
         ]
     )

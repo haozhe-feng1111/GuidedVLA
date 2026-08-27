@@ -455,6 +455,17 @@ def test_dinov2_shallow_guidance_config_only_moves_external_kv_layers():
     assert config.skill_head_indices == [6, 7]
 
 
+def test_wan22_training_config_uses_native_features_and_deep_layers():
+    from openpi.training import config as training_config
+
+    config = training_config.get_config("pi0_libero_object_wan22_vae_skill").model
+
+    assert config.use_wan22_encoder
+    assert config.wan22_dtype == "bfloat16"
+    assert config.depth_guided_layer_indices == [9, 10, 11, 12]
+    assert config.wan22_head_indices == [4, 5]
+
+
 def test_joint_backbone_routes_external_kv_to_depth_guided_layers():
     captured = {}
 

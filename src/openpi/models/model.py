@@ -59,6 +59,7 @@ _SAM2_TOKEN_MERGING_PREFIX = "sam2_module.token_merging_model."
 _SAM2_TOKEN_PROJ_PREFIX = "sam2_token_proj."
 _PATCH16_TOKEN_MERGING_PREFIX = "patch16_module.token_merging_model."
 _PATCH16_TOKEN_PROJ_PREFIX = "patch16_token_proj."
+_WAN22_TOKEN_PROJ_PREFIX = "wan22_token_proj."
 
 
 def normalize_pytorch_state_dict_for_loading(
@@ -231,6 +232,20 @@ def _validate_patch16_adapter_weights_loaded(
     )
 
 
+def _validate_wan22_adapter_weights_loaded(
+    checkpoint_state_dict: dict[str, torch.Tensor],
+    missing_keys: list[str],
+    unexpected_keys: list[str],
+) -> None:
+    _validate_adapter_weights_loaded(
+        checkpoint_state_dict,
+        missing_keys,
+        unexpected_keys,
+        adapter_prefixes=(_WAN22_TOKEN_PROJ_PREFIX,),
+        adapter_label="Wan2.2 encoder adapter",
+    )
+
+
 def _validate_external_adapter_weights_loaded(
     checkpoint_state_dict: dict[str, torch.Tensor],
     missing_keys: list[str],
@@ -240,6 +255,7 @@ def _validate_external_adapter_weights_loaded(
     _validate_depth_token_merging_weights_loaded(checkpoint_state_dict, missing_keys, unexpected_keys)
     _validate_sam2_adapter_weights_loaded(checkpoint_state_dict, missing_keys, unexpected_keys)
     _validate_patch16_adapter_weights_loaded(checkpoint_state_dict, missing_keys, unexpected_keys)
+    _validate_wan22_adapter_weights_loaded(checkpoint_state_dict, missing_keys, unexpected_keys)
 
 
 def filter_depth_weights_for_inference_ablation(
@@ -557,7 +573,16 @@ class BaseModelConfig(abc.ABC):
         expected_missing, unexpected_missing = [], []
         for key in missing_keys:
             if key.startswith(
-                ("depth", "sam2_module.", "sam2_token_proj.", "patch16_module.", "patch16_token_proj.", "skill_head.")
+                (
+                    "depth",
+                    "sam2_module.",
+                    "sam2_token_proj.",
+                    "patch16_module.",
+                    "patch16_token_proj.",
+                    "wan22_module.",
+                    "wan22_token_proj.",
+                    "skill_head.",
+                )
             ):
                 expected_missing.append(key)
             else:

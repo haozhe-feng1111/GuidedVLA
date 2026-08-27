@@ -86,6 +86,7 @@ class DepthTokenKVProjector(nn.Module):
         head_dim: int,
         num_groups: int,
         depth_head_indices: list[int],
+        headwise_xavier_init: bool = False,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -99,13 +100,20 @@ class DepthTokenKVProjector(nn.Module):
         self.k_projectors = nn.ModuleList([nn.Linear(hidden_size, self.total_kv_dim) for _ in range(num_groups)])
         self.v_projectors = nn.ModuleList([nn.Linear(hidden_size, self.total_kv_dim) for _ in range(num_groups)])
         self.depth_head_indices = depth_head_indices
+        self.headwise_xavier_init = headwise_xavier_init
 
         self._init_weights()
 
     def _init_weights(self):
         for i in range(self.num_groups):
-            nn.init.xavier_uniform_(self.k_projectors[i].weight)
-            nn.init.xavier_uniform_(self.v_projectors[i].weight)
+            if self.headwise_xavier_init:
+                for head_weight in self.k_projectors[i].weight.view(self.num_heads, self.head_dim, self.hidden_size):
+                    nn.init.xavier_uniform_(head_weight)
+                for head_weight in self.v_projectors[i].weight.view(self.num_heads, self.head_dim, self.hidden_size):
+                    nn.init.xavier_uniform_(head_weight)
+            else:
+                nn.init.xavier_uniform_(self.k_projectors[i].weight)
+                nn.init.xavier_uniform_(self.v_projectors[i].weight)
             nn.init.zeros_(self.k_projectors[i].bias)
             nn.init.zeros_(self.v_projectors[i].bias)
 
