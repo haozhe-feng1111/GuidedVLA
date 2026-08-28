@@ -117,6 +117,13 @@ class Pi0Config(_model.BaseModelConfig):
     wan22_head_indices: list[int] = field(default_factory=lambda: [4])
     wan22_use_control: bool = False
 
+    # RAFT-Large single-frame fnet visual encoder. This does not run optical
+    # flow: no image pair, correlation volume, context net, or update block.
+    use_raft_encoder: bool = False
+    raft_checkpoint_path: str | None = None
+    raft_head_indices: list[int] = field(default_factory=lambda: [4])
+    raft_use_control: bool = False
+
     # Skill (H_skill)
     use_skill_loss: bool = False
     # Number of discrete skill classes available in the dataset / model head.
@@ -139,10 +146,16 @@ class Pi0Config(_model.BaseModelConfig):
 
         # Control-branch sanity checks.
         enabled_external_encoders = sum(
-            (self.use_depth, self.use_sam2, self.use_patch16_encoder, self.use_wan22_encoder)
+            (
+                self.use_depth,
+                self.use_sam2,
+                self.use_patch16_encoder,
+                self.use_wan22_encoder,
+                self.use_raft_encoder,
+            )
         )
         if enabled_external_encoders > 1:
-            raise ValueError("depth, SAM2, Patch16, and Wan2.2 encoder arms are mutually exclusive")
+            raise ValueError("depth, SAM2, Patch16, Wan2.2, and RAFT encoder arms are mutually exclusive")
 
         if self.use_sam2:
             if not self.sam2_model_config:
@@ -178,6 +191,12 @@ class Pi0Config(_model.BaseModelConfig):
             if len(self.wan22_head_indices) == 0:
                 raise ValueError("wan22_head_indices must be non-empty")
 
+        if self.use_raft_encoder:
+            if not self.raft_checkpoint_path:
+                raise ValueError("raft_checkpoint_path must be set when use_raft_encoder is True")
+            if len(self.raft_head_indices) == 0:
+                raise ValueError("raft_head_indices must be non-empty")
+
         if not self.control_attention_enabled and (
             self.object_use_control
             or self.skill_use_control
@@ -185,6 +204,7 @@ class Pi0Config(_model.BaseModelConfig):
             or self.sam2_use_control
             or self.patch16_use_control
             or self.wan22_use_control
+            or self.raft_use_control
         ):
             raise ValueError(
                 "control_attention_enabled is False but a *_use_control flag is True. "
@@ -204,6 +224,7 @@ class Pi0Config(_model.BaseModelConfig):
             ("sam2_head_indices", self.sam2_head_indices),
             ("patch16_head_indices", self.patch16_head_indices),
             ("wan22_head_indices", self.wan22_head_indices),
+            ("raft_head_indices", self.raft_head_indices),
         ):
             if any(idx < 0 for idx in indices):
                 raise ValueError(f"{name} must contain non-negative indices")
@@ -221,6 +242,8 @@ class Pi0Config(_model.BaseModelConfig):
             raise ValueError("patch16_head_indices contains duplicate entries")
         if len(set(self.wan22_head_indices)) != len(self.wan22_head_indices):
             raise ValueError("wan22_head_indices contains duplicate entries")
+        if len(set(self.raft_head_indices)) != len(self.raft_head_indices):
+            raise ValueError("raft_head_indices contains duplicate entries")
         if any(idx < 0 for idx in self.guided_layer_indices):
             raise ValueError("guided_layer_indices must contain non-negative indices")
         if len(self.guided_layer_indices) != 4:
@@ -284,6 +307,11 @@ class Pi0Config(_model.BaseModelConfig):
                 overlap = sorted(set(occupied) & set(self.wan22_head_indices))
                 if overlap:
                     raise ValueError(f"{label}_head_indices and wan22_head_indices overlap: {overlap}")
+        if self.use_raft_encoder:
+            for label, occupied in (("object", self.object_head_indices), ("skill", self.skill_head_indices)):
+                overlap = sorted(set(occupied) & set(self.raft_head_indices))
+                if overlap:
+                    raise ValueError(f"{label}_head_indices and raft_head_indices overlap: {overlap}")
 
     @property
     @override

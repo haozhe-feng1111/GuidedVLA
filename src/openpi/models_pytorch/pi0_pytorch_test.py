@@ -466,6 +466,35 @@ def test_wan22_training_config_uses_native_features_and_deep_layers():
     assert config.wan22_head_indices == [4, 5]
 
 
+def test_raft_training_config_uses_single_final_fnet_feature_and_deep_layers():
+    from openpi.training import config as training_config
+
+    config = training_config.get_config("pi0_libero_object_raft_large_fnet_skill").model
+
+    assert config.use_raft_encoder
+    assert config.depth_guided_layer_indices == [9, 10, 11, 12]
+    assert config.raft_head_indices == [4, 5]
+    assert config.object_head_indices == [0, 1]
+    assert config.skill_head_indices == [6, 7]
+
+
+def test_raft_config_rejects_other_external_encoders_and_head_overlap():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        pi0_config.Pi0Config(
+            use_depth=True,
+            use_raft_encoder=True,
+            raft_checkpoint_path="raft.pth",
+        )
+
+    with pytest.raises(ValueError, match="object_head_indices and raft_head_indices overlap"):
+        pi0_config.Pi0Config(
+            control_attention_enabled=True,
+            use_raft_encoder=True,
+            raft_checkpoint_path="raft.pth",
+            raft_head_indices=[0],
+        )
+
+
 def test_joint_backbone_routes_external_kv_to_depth_guided_layers():
     captured = {}
 

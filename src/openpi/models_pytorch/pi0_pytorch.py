@@ -20,6 +20,7 @@ from openpi.models_pytorch.gemma_pytorch import HeadSupervisionConfig
 from openpi.models_pytorch.gemma_pytorch import PaliGemmaWithExpertModel
 from openpi.models_pytorch.gemma_pytorch import SupervisedHeadStates
 from openpi.models_pytorch.patch16.model import Patch16Encoder
+from openpi.models_pytorch.raft.model import RaftFeatureEncoder
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 from openpi.models_pytorch.sam2.model import Sam2Encoder
 from openpi.models_pytorch.wan22.model import Wan22VAEEncoder
@@ -126,14 +127,21 @@ class PI0Pytorch(nn.Module):
         self.use_sam2 = bool(getattr(config, "use_sam2", False))
         self.use_patch16_encoder = bool(getattr(config, "use_patch16_encoder", False))
         self.use_wan22_encoder = bool(getattr(config, "use_wan22_encoder", False))
-        if sum((self.use_depth, self.use_sam2, self.use_patch16_encoder, self.use_wan22_encoder)) > 1:
-            raise ValueError("depth, SAM2, Patch16, and Wan2.2 encoder arms are mutually exclusive")
+        self.use_raft_encoder = bool(getattr(config, "use_raft_encoder", False))
+        external_encoder_count = sum(
+            (self.use_depth, self.use_sam2, self.use_patch16_encoder, self.use_wan22_encoder, self.use_raft_encoder)
+        )
+        if external_encoder_count > 1:
+            raise ValueError("depth, SAM2, Patch16, Wan2.2, and RAFT encoder arms are mutually exclusive")
         self.sam2_use_control = bool(getattr(config, "sam2_use_control", False))
         self.patch16_use_control = bool(getattr(config, "patch16_use_control", False))
         self.wan22_use_control = bool(getattr(config, "wan22_use_control", False))
+        self.raft_use_control = bool(getattr(config, "raft_use_control", False))
         self.depth_use_control = bool(getattr(config, "depth_use_control", True))
         self.external_kv_use_control = (
-            self.wan22_use_control
+            self.raft_use_control
+            if self.use_raft_encoder
+            else self.wan22_use_control
             if self.use_wan22_encoder
             else self.patch16_use_control
             if self.use_patch16_encoder
@@ -206,6 +214,7 @@ class PI0Pytorch(nn.Module):
         self.use_sam2 = config.use_sam2
         self.use_patch16_encoder = config.use_patch16_encoder
         self.use_wan22_encoder = config.use_wan22_encoder
+        self.use_raft_encoder = config.use_raft_encoder
         if self.use_depth:
             self.depth_module = DepthEncoder(
                 depth_model_name=config.depth_model_name,
@@ -268,6 +277,16 @@ class PI0Pytorch(nn.Module):
                 head_dim=256,
                 num_groups=len(self.depth_guided_layer_indices),
                 depth_head_indices=config.wan22_head_indices,
+                headwise_xavier_init=True,
+            )
+        elif self.use_raft_encoder:
+            self.raft_module = RaftFeatureEncoder(checkpoint_path=config.raft_checkpoint_path)
+            self.raft_token_proj = DepthTokenKVProjector(
+                hidden_size=256,
+                num_heads=8,
+                head_dim=256,
+                num_groups=len(self.depth_guided_layer_indices),
+                depth_head_indices=config.raft_head_indices,
                 headwise_xavier_init=True,
             )
         elif self.depth_guided_layer_indices:
@@ -342,6 +361,10 @@ class PI0Pytorch(nn.Module):
             external_features = self.wan22_module(images[0])
             token_projector = self.wan22_token_proj
             encoder_name = "Wan2.2 TI2V-5B VAE"
+        elif self.use_raft_encoder:
+            external_features = self.raft_module(images[0])
+            token_projector = self.raft_token_proj
+            encoder_name = "RAFT-Large fnet"
         else:
             return None
 
