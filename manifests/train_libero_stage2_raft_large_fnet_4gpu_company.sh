@@ -15,7 +15,7 @@ STAGE1_CHECKPOINT="${STAGE1_CHECKPOINT:-${BASE}/outputs/${STAGE1_RUN_ID}/pi0_lib
 RAFT_CHECKPOINT="${RAFT_CHECKPOINT:-${BASE}/models/raft/raft_large_C_T_SKHT_V2-ff5fadd5.pth}"
 
 CONFIG_NAME=pi0_libero_object_raft_large_fnet_skill
-RUN_NAME="${RUN_NAME:-guidedvla_libero_stage2_object_raft_large_fnet_skill_4gpu_30k_v1}"
+RUN_NAME="${RUN_NAME:-guidedvla_libero_stage2_object_raft_large_fnet_skill_4gpu_local6_ga1_30k_v1}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${BASE}/outputs/${RUN_NAME}}"
 LOG_ROOT="${LOG_ROOT:-${BASE}/logs/${RUN_NAME}}"
 CACHE_ROOT="${CACHE_ROOT:-${BASE}/cache/${RUN_NAME}}"
@@ -65,14 +65,14 @@ cd "${PROJECT_ROOT}"
     echo "encoder=torchvision RAFT-Large C_T_SKHT_V2 fnet only, current base camera frame, 224x224, frozen/eval"
     echo "tokens=28x28x256 bilinear_to_16x16x256 shared_across_4_independent_headwise_xavier_kv_projectors"
     echo "interpretation=single-frame visual prior; no optical flow, image pair, correlation, context net, or update block"
-    echo "physical_global_batch=16 gradient_accumulation_steps=4 effective_global_batch=64"
+    echo "per_gpu_batch=6 physical_global_batch=24 gradient_accumulation_steps=1 effective_global_batch=24"
     "${RUNTIME}/bin/python" -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=4 \
         scripts/train_pytorch.py "${CONFIG_NAME}" \
         --exp-name "${RUN_NAME}" --repo_id ybwowen/libero --local_root_dir "${DATA_ROOT}" \
         --data.assets.asset-id ybwowen/libero --data.assets.assets-dir "${NORM_STATS_SOURCE}" \
         --assets-base-dir "${ASSETS_ROOT}" --checkpoint-base-dir "${OUTPUT_ROOT}" \
         --model.raft-checkpoint-path "${RAFT_CHECKPOINT}" \
-        --batch-size 16 --gradient-accumulation-steps 4 --num-workers 2 \
+        --batch-size 24 --gradient-accumulation-steps 1 --num-workers 2 \
         --pytorch-training-precision float32 --use-gradient-checkpointing \
         --ddp-find-unused-parameters --wandb-enabled --num-train-steps 30000 \
         --log-interval 10 --save-interval 10000 --val-interval 10000 --val-max-batches 1 \
