@@ -94,22 +94,49 @@ def infer_category(path: pathlib.Path) -> str:
 
 
 def extract_rate(data: dict) -> float | None:
+    # Ignore manifests and other non-result JSON, but never fall back to stale
+    # counters when episode evidence is missing or invalid.
+    if not any(key in data for key in ("success", "failure", "running_counts")):
+        return None
     success = data.get("success")
     failure = data.get("failure")
-    if isinstance(success, list) and isinstance(failure, list):
-        total = len(success) + len(failure)
-        if total == 0:
-            return None
-        return len(success) / total
+    if not isinstance(success, list) or not isinstance(failure, list):
+        raise ValueError("Missing episode lists; counters alone cannot prove completion")
+    records = success + failure
+    if any(not isinstance(record, dict) or record.get("error") for record in records):
+        raise ValueError("Invalid episode or infrastructure error; resume the evaluation before extracting")
 
-    running_counts = data.get("running_counts")
-    if isinstance(running_counts, dict):
-        total = running_counts.get("total_episodes")
-        successes = running_counts.get("total_successes")
-        if isinstance(total, int) and isinstance(successes, int) and total > 0:
-            return successes / total
-
-    return None
+    meta = data.get("meta")
+    if not isinstance(meta, dict):
+        raise ValueError("Missing evaluation metadata; cannot verify completion")
+    selected = meta.get("selected_task_ids")
+    trials = meta.get("num_trials_per_task")
+    if not isinstance(selected, dict) or not selected or type(trials) is not int or trials <= 0:
+        raise ValueError("Missing task selection or trial count; cannot verify completion")
+    expected = set()
+    for suite, task_ids in selected.items():
+        if (
+            not isinstance(suite, str) or not suite
+            or not isinstance(task_ids, list) or not task_ids
+            or any(type(task_id) is not int or task_id < 0 for task_id in task_ids)
+            or len(set(task_ids)) != len(task_ids)
+        ):
+            raise ValueError("Invalid task selection metadata")
+        expected.update((suite, task_id, episode) for task_id in task_ids for episode in range(trials))
+    identities = []
+    for record in records:
+        extra = record.get("extra")
+        suite = extra.get("suite") if isinstance(extra, dict) else None
+        task_id, episode = record.get("task_id"), record.get("episode_index")
+        if not isinstance(suite, str) or type(task_id) is not int or type(episode) is not int:
+            raise ValueError("Invalid episode identity")
+        identities.append((suite, task_id, episode))
+    if set(identities) != expected or len(identities) != len(expected):
+        raise ValueError("Missing, duplicate or unexpected episodes; evaluation is incomplete")
+    # Legacy files without this flag remain usable if their evidence is complete.
+    if "completed" in meta and meta["completed"] is not True:
+        raise ValueError("Evaluation has not completed its final validation")
+    return len(success) / len(records)
 
 
 def load_scores(json_paths: list[pathlib.Path]) -> dict[tuple[str, str], float]:
@@ -119,15 +146,19 @@ def load_scores(json_paths: list[pathlib.Path]) -> dict[tuple[str, str], float]:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:
-            print(f"[WARN] Failed to read {path}: {exc}", file=sys.stderr)
-            continue
+            raise ValueError(f"Cannot read result JSON {path}: {exc}") from exc
 
         if not isinstance(data, dict):
-            continue
+            raise ValueError(f"{path}: expected a JSON object")
 
         suite = infer_suite(path, data)
         category = infer_category(path)
-        rate = extract_rate(data)
+        try:
+            rate = extract_rate(data)
+        except ValueError as exc:
+            raise ValueError(f"{path}: {exc}") from exc
+        if suite is not None and rate is None:
+            raise ValueError(f"{path}: missing episode evidence")
         if suite is None or rate is None:
             continue
 
@@ -198,7 +229,11 @@ def main() -> int:
         print("No JSON files found.", file=sys.stderr)
         return 1
 
-    scores = load_scores(json_paths)
+    try:
+        scores = load_scores(json_paths)
+    except ValueError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
     if not scores:
         print("No valid LIBERO-Plus result JSON found.", file=sys.stderr)
         return 1

@@ -951,7 +951,10 @@ def _evaluation_identity(args: Args) -> dict:
         identity["checkpoint_files"] = {}
         for path in sorted(files):
             with path.open("rb") as stream:
-                identity["checkpoint_files"][str(path.relative_to(root))] = hashlib.file_digest(stream, "sha256").hexdigest()
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                identity["checkpoint_files"][str(path.relative_to(root))] = digest.hexdigest()
     return identity
 
 

@@ -116,6 +116,8 @@ Use separate output directories for each experiment. To resume a run created by 
 the batch command with `--resume true` and the same checkpoint, protocol, results and video directories.
 GPU placement, ports and timeouts may change. `eval_manifest.json` validates the configuration and SHA-256
 of local checkpoint weights and normalization files; hashing a large checkpoint takes additional time.
+Hashing uses bounded chunks and preserves the existing SHA-256 identity format. Run the batch runner
+and CPU regression checks with Python 3.11 or newer; the simulator uses its separate Python 3.8 environment.
 Resume requires a local checkpoint. Older runs without a manifest must use new output directories;
 do not bypass the output guard. Standalone `main.py --resume` checks the saved client protocol, but
 cannot verify the remote policy checkpoint: use the batch runner for checkpoint-verified resumption.
@@ -123,6 +125,18 @@ cannot verify the remote policy checkpoint: use the batch runner for checkpoint-
 Completed episodes are identified by result JSON, not by an existing video. Infrastructure errors are
 retried and replace their prior episode record across success/failure buckets. Resume logs go into a
 new attempt subdirectory. An empty or incomplete result set does not count as a completed batch.
+
+`running_counts` counts only valid rollouts; `total_errors` separately counts infrastructure errors,
+and `success_rate` is `null` when no valid rollout exists. Counts remain interim until
+`meta.completed` is true after final validation. Resume recomputes these counters from saved episodes.
+
+`extract_libero_plus_results.py` refuses errored, missing, duplicate or unexpected episodes before
+writing its table. It checks each result against `meta.selected_task_ids` and `meta.num_trials_per_task`,
+not cached counters. Legacy files without `meta.completed` are accepted only when that metadata and
+the complete episode evidence are present; files lacking them require separate verification, not a
+guard bypass. A malformed input aborts extraction without overwriting the output. Point the extractor
+at one experiment: each supplied result must be complete, while absent suites/categories remain blank
+and do not certify a complete benchmark matrix.
 
 CPU regression checks (no models, GPU or simulator required):
 

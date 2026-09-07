@@ -2,6 +2,7 @@
 # ruff: noqa: SLF001 -- regression tests exercise the existing private helpers
 
 import dataclasses
+import hashlib
 import importlib.util
 import json
 import pathlib
@@ -156,6 +157,17 @@ def test_resume_rejects_replaced_weights_at_the_same_path(tmp_path):
         runner._validate_args(dataclasses.replace(args, resume=True))
 
 
+def test_checkpoint_digest_matches_sha256_without_file_digest(monkeypatch, tmp_path):
+    args = _run_args(tmp_path)
+    content = b"weights" * 400000  # Cross multiple read chunks.
+    (pathlib.Path(args.checkpoint_dir) / "model.safetensors").write_bytes(content)
+    monkeypatch.delattr(hashlib, "file_digest", raising=False)
+    identity = runner._evaluation_identity(args)
+    assert identity["checkpoint_files"]["model.safetensors"] == hashlib.sha256(content).hexdigest()
+    runner._validate_args(args)
+    runner._validate_args(dataclasses.replace(args, resume=True))
+
+
 def test_missing_norm_stats_fail_before_outputs_or_workers(tmp_path):
     args = _run_args(tmp_path)
     (pathlib.Path(args.checkpoint_dir) / "assets/ybwowen/libero/norm_stats.json").unlink()
@@ -183,6 +195,14 @@ def test_failed_episode_is_retried_and_replaced_across_buckets(client_modules, t
         "extra": {"suite": "libero_spatial"},
     }
     store.record_episode(**kwargs, success=False, error="ConnectionClosed")
+    data = json.loads(store.path.read_text())
+    assert data["running_counts"] == {
+        "total_episodes": 0,
+        "total_successes": 0,
+        "total_errors": 1,
+        "success_rate": None,
+    }
+    assert data["meta"]["completed"] is False
     assert store.completed_episode(0, 0, "libero_spatial") is None
     with pytest.raises(RuntimeError, match="errored"):
         store.require_complete({"libero_spatial": [0]})
@@ -193,6 +213,12 @@ def test_failed_episode_is_retried_and_replaced_across_buckets(client_modules, t
     assert data["running_counts"]["total_episodes"] == 1
     assert store.completed_episode(0, 0, "libero_spatial")["success"] is True
     store.require_complete({"libero_spatial": [0]})
+    data = json.loads(store.path.read_text())
+    assert data["running_counts"]["total_errors"] == 0
+    assert data["meta"]["completed"] is True
+    from examples.libero_plus import extract_libero_plus_results as extractor
+
+    assert extractor.extract_rate(data) == 1.0
     with pytest.raises(RuntimeError, match="missing"):
         store.require_complete({"libero_spatial": [0, 1]})
 
@@ -208,6 +234,27 @@ def test_results_reject_protocol_changes_and_corrupt_json(client_modules, tmp_pa
     with pytest.raises(RuntimeError, match="losing evidence"):
         module.ResultsStore(args).initialize({"libero_spatial": [0]})
     assert path.read_text() == "broken evidence"
+
+
+def test_resume_recomputes_valid_counts_without_counting_infrastructure_errors(client_modules, tmp_path):
+    module, args, store = _store(client_modules, tmp_path)
+    kwargs = {
+        "task_id": 0,
+        "task_description": "task",
+        "steps_taken": 1,
+        "video_path": tmp_path / "video.mp4",
+        "extra": {"suite": "libero_spatial"},
+    }
+    store.record_episode(**kwargs, episode_index=0, success=True)
+    store.record_episode(**kwargs, episode_index=1, success=False)
+    store.record_episode(**kwargs, episode_index=2, success=False, error="ConnectionClosed")
+    expected = {"total_episodes": 2, "total_successes": 1, "total_errors": 1, "success_rate": 0.5}
+    data = json.loads(store.path.read_text())
+    assert data["running_counts"] == expected
+    data["running_counts"] = {"total_episodes": 3, "total_successes": 1, "success_rate": 1 / 3}
+    store.path.write_text(json.dumps(data))
+    module.ResultsStore(dataclasses.replace(args, resume=True)).initialize({"libero_spatial": [0]})
+    assert json.loads(store.path.read_text())["running_counts"] == expected
 
 
 @pytest.mark.parametrize("name", ["libero", "libero_plus"])

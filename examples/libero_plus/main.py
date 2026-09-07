@@ -614,10 +614,7 @@ class ResultsStore:
 
         data.setdefault("success", [])
         data.setdefault("failure", [])
-        data.setdefault(
-            "running_counts",
-            {"total_episodes": 0, "total_successes": 0, "success_rate": 0.0},
-        )
+        self._update_running_counts(data)
         self._atomic_write_json(data, self.path)
         self._initialized = True
         return self.path
@@ -647,6 +644,23 @@ class ResultsStore:
         identities = [(r.get("extra", {}).get("suite"), r.get("task_id"), r.get("episode_index")) for r in records]
         if not expected or set(identities) != expected or len(identities) != len(expected) or any(r.get("error") for r in records):
             raise RuntimeError(f"Evaluation has missing, duplicate, unexpected or errored episodes: {self.path}")
+        data["meta"]["completed"] = True
+        self._atomic_write_json(data, self.path)
+
+    @staticmethod
+    def _update_running_counts(data: Dict[str, Any]) -> None:
+        successes = sum(not record.get("error") for record in data["success"])
+        failures = sum(not record.get("error") for record in data["failure"])
+        total = successes + failures
+        data["running_counts"] = {
+            "total_episodes": total,
+            "total_successes": successes,
+            "total_errors": len(data["success"]) + len(data["failure"]) - total,
+            "success_rate": successes / total if total else None,
+        }
+        # Only require_complete may certify a final result. These counts are
+        # interim, including when resuming an older file with stale counters.
+        data.setdefault("meta", {})["completed"] = False
 
     def record_episode(
         self,
@@ -691,14 +705,7 @@ class ResultsStore:
 
         data.setdefault(bucket, []).append(record)
 
-        rc = data.setdefault(
-            "running_counts",
-            {"total_episodes": 0, "total_successes": 0, "success_rate": 0.0},
-        )
-        rc["total_episodes"] = len(data["success"]) + len(data["failure"])
-        rc["total_successes"] = len(data["success"])
-        total = max(1, rc["total_episodes"])
-        rc["success_rate"] = float(rc["total_successes"]) / float(total)
+        self._update_running_counts(data)
 
         data.setdefault("meta", {})
         data["meta"]["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
