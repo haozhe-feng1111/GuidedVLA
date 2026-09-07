@@ -59,6 +59,7 @@ class Args:
     task_ids: Optional[str] = None
     num_steps_wait: int = 10
     num_trials_per_task: int = 1
+    resume: bool = False
 
     video_out_path: str = "data/libero/videos"
 
@@ -347,6 +348,8 @@ class EpisodeFrameCollector:
         self.replay_images.append(img)
 
     def write_artifacts(self, artifacts: EpisodeArtifacts) -> pathlib.Path:
+        if not self.replay_images:
+            return artifacts.rollout_video
         return artifacts.write_rollout(self.replay_images, fps=10)
 
 
@@ -531,6 +534,7 @@ class ResultsStore:
     def __init__(self, args: Args):
         self.args = args
         self.path = pathlib.Path(args.results_json_path)
+        self._initialized = False
 
     @staticmethod
     def _default_data() -> Dict[str, Any]:
@@ -571,13 +575,27 @@ class ResultsStore:
         try:
             with open(self.path, encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            return self._default_data()
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"Cannot read existing results without losing evidence: {self.path}") from exc
 
     def initialize(self, selected) -> pathlib.Path:
         now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
         data = self._read_json()
         meta = data.setdefault("meta", {})
+        protocol = {
+            name: getattr(self.args, name)
+            for name in (
+                "task_suite_name", "resize_size", "replan_steps", "num_trials_per_task",
+                "seed", "num_steps_wait", "prompt_strip_trailing_id_with_prev",
+                "prompt_strip_trailing_word_ending_with_digit",
+            )
+        }
+        if not self._initialized and self.path.exists():
+            if not self.args.resume:
+                raise FileExistsError(f"Results already exist: {self.path}; use --resume for the same experiment.")
+            if any(meta.get(key) != value for key, value in protocol.items()):
+                raise ValueError(f"Resume protocol differs from existing results: {self.path}")
+        meta.update(protocol)
         meta.setdefault("created_at", now_iso)
         meta.update(
             {
@@ -601,7 +619,34 @@ class ResultsStore:
             {"total_episodes": 0, "total_successes": 0, "success_rate": 0.0},
         )
         self._atomic_write_json(data, self.path)
+        self._initialized = True
         return self.path
+
+    def completed_episode(self, task_id: int, episode_index: int, suite_name: str) -> Optional[Dict[str, Any]]:
+        data = self._read_json()
+        for bucket in ("success", "failure"):
+            for record in data.get(bucket, []):
+                if (
+                    record.get("task_id") == task_id
+                    and record.get("episode_index") == episode_index
+                    and record.get("extra", {}).get("suite") == suite_name
+                    and not record.get("error")
+                ):
+                    return dict(record, success=bucket == "success")
+        return None
+
+    def require_complete(self, selected: Dict[str, List[int]]) -> None:
+        data = self._read_json()
+        expected = {
+            (suite, task_id, episode)
+            for suite, task_ids in selected.items()
+            for task_id in task_ids
+            for episode in range(self.args.num_trials_per_task)
+        }
+        records = data.get("success", []) + data.get("failure", [])
+        identities = [(r.get("extra", {}).get("suite"), r.get("task_id"), r.get("episode_index")) for r in records]
+        if not expected or set(identities) != expected or len(identities) != len(expected) or any(r.get("error") for r in records):
+            raise RuntimeError(f"Evaluation has missing, duplicate, unexpected or errored episodes: {self.path}")
 
     def record_episode(
         self,
@@ -618,13 +663,18 @@ class ResultsStore:
         data = self._read_json()
 
         bucket = "success" if success else "failure"
-        for existing_record in data.get(bucket, []):
-            if (
-                existing_record.get("task_id") == task_id
-                and existing_record.get("episode_index") == episode_index
-                and existing_record.get("task_description") == task_description
-            ):
-                return
+        suite_name = (extra or {}).get("suite")
+        # A retry replaces the same episode across BOTH buckets, including a
+        # previous infrastructure failure. Recompute counts from persisted data.
+        for existing_bucket in ("success", "failure"):
+            data[existing_bucket] = [
+                record for record in data.get(existing_bucket, [])
+                if not (
+                    record.get("task_id") == task_id
+                    and record.get("episode_index") == episode_index
+                    and record.get("extra", {}).get("suite") == suite_name
+                )
+            ]
 
         record: Dict[str, Any] = {
             "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -645,9 +695,8 @@ class ResultsStore:
             "running_counts",
             {"total_episodes": 0, "total_successes": 0, "success_rate": 0.0},
         )
-        rc["total_episodes"] = int(rc.get("total_episodes", 0)) + 1
-        if success:
-            rc["total_successes"] = int(rc.get("total_successes", 0)) + 1
+        rc["total_episodes"] = len(data["success"]) + len(data["failure"])
+        rc["total_successes"] = len(data["success"])
         total = max(1, rc["total_episodes"])
         rc["success_rate"] = float(rc["total_successes"]) / float(total)
 
@@ -758,22 +807,12 @@ def eval_libero(args: Args) -> None:
                 )
 
                 for episode_idx in tqdm.tqdm(range(args.num_trials_per_task), desc=f"episodes for task {task_id}"):
-                    existing = EpisodeArtifacts.find_existing(args, task_description, episode_idx)
+                    existing = results_store.completed_episode(task_id, episode_idx, suite_name) if args.resume else None
                     if existing is not None:
-                        status = "SUCCESS" if existing.success else "FAILURE"
+                        status = "SUCCESS" if existing["success"] else "FAILURE"
                         logging.info(f"⏭️  Skipping task {task_id} episode {episode_idx}: already completed ({status})")
-                        suite_stats.record(success=existing.success)
-                        overall_stats.record(success=existing.success)
-                        results_store.record_episode(
-                            task_id=task_id,
-                            task_description=task_description,
-                            episode_index=episode_idx,
-                            steps_taken=-1,
-                            success=existing.success,
-                            video_path=existing.video_path,
-                            error=None,
-                            extra=_episode_extra(args, suite_name, max_steps, model_prompt, skipped=True),
-                        )
+                        suite_stats.record(success=existing["success"])
+                        overall_stats.record(success=existing["success"])
                         continue
 
                     logging.info(f"\nTask: {task_description} | episode {episode_idx + 1}/{args.num_trials_per_task}")
@@ -796,6 +835,8 @@ def eval_libero(args: Args) -> None:
                         error=result.last_error,
                         extra=_episode_extra(args, suite_name, max_steps, model_prompt),
                     )
+                    if result.last_error:
+                        raise RuntimeError(f"Episode infrastructure failure: {result.last_error}")
             finally:
                 close_fn = getattr(env, "close", None)
                 if callable(close_fn):
@@ -806,6 +847,7 @@ def eval_libero(args: Args) -> None:
 
     logging.info(f"Total success rate: {overall_stats.rate}")
     logging.info(f"Total episodes: {overall_stats.episodes}")
+    results_store.require_complete(selected_map)
 
 
 def _get_libero_env(task, resolution, seed):

@@ -1,3 +1,4 @@
+import inspect
 import logging
 import time
 from typing import Dict, Optional, Tuple
@@ -28,11 +29,22 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
 
     def _wait_for_server(self) -> Tuple[websockets.sync.client.ClientConnection, Dict]:
         logging.info(f"Waiting for server at {self._uri}...")
+        # Sync keepalive was added in websockets 15. Older Python 3.8 clients
+        # forward unknown kwargs to socket.create_connection instead.
+        connect_kwargs = {}
+        if "ping_timeout" in inspect.signature(websockets.sync.client.connect).parameters:
+            connect_kwargs["ping_timeout"] = None
         while True:
             try:
                 headers = {"Authorization": f"Api-Key {self._api_key}"} if self._api_key else None
                 conn = websockets.sync.client.connect(
-                    self._uri, compression=None, max_size=None, additional_headers=headers
+                    self._uri,
+                    compression=None,
+                    max_size=None,
+                    additional_headers=headers,
+                    # Cold inference can block the server event loop. The
+                    # evaluator owns the overall request/task timeout.
+                    **connect_kwargs,
                 )
                 metadata = msgpack_numpy.unpackb(conn.recv())
                 return conn, metadata

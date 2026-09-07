@@ -1,5 +1,6 @@
 import argparse
 import dataclasses
+import hashlib
 import http.client
 import json
 import os
@@ -50,6 +51,7 @@ class Args:
     )
     task_ids: Optional[str] = None
     num_trials_per_task: int = 1
+    resume: bool = False
 
     client_host: str = "127.0.0.1"
     resize_size: int = 224
@@ -547,7 +549,12 @@ def _detect_virtual_env_root(python_path: pathlib.Path) -> Optional[pathlib.Path
 
 def _build_client_env(args: Args) -> dict[str, str]:
     client_env = os.environ.copy()
-    client_env["PYTHONPATH"] = _compose_pythonpath(pathlib.Path(args.libero_plus_path), client_env.get("PYTHONPATH"))
+    # The simulator uses a different Python ABI. Never inherit the policy
+    # environment's site-packages (or a different checkout's client library).
+    client_env["PYTHONPATH"] = os.pathsep.join(
+        [args.libero_plus_path, str(REPO_ROOT / "packages" / "openpi-client" / "src")]
+    )
+    client_env["PYTHONNOUSERSITE"] = "1"
     client_env.pop("PYTHONHOME", None)
     venv_root = _detect_virtual_env_root(pathlib.Path(args.client_python))
     if venv_root is not None:
@@ -563,6 +570,8 @@ def _build_client_env(args: Args) -> dict[str, str]:
 def _record_task_failure(message: str) -> None:
     with task_failure_lock:
         task_failures.append(message)
+    # These are infrastructure failures, not unsuccessful benchmark rollouts.
+    shutdown_event.set()
 
 
 def _build_server_env(args: Args, gpu_id: int) -> dict[str, str]:
@@ -573,12 +582,24 @@ def _build_server_env(args: Args, gpu_id: int) -> dict[str, str]:
 
 def _run_client_preflight(args: Args, client_env: dict[str, str]) -> dict[str, object]:
     check_script = """
-import importlib.util
 import json
 import os
 import sys
 
 import imageio
+import imageio_ffmpeg
+import mujoco
+from OpenGL import GL
+from wand.api import library
+from libero.libero import get_libero_path
+from libero.libero.envs import OffScreenRenderEnv
+from openpi_client import websocket_client_policy
+
+for name in ("bddl_files", "init_states", "assets"):
+    path = get_libero_path(name)
+    if not os.path.isdir(path):
+        raise SystemExit("Missing LIBERO " + name + ": " + path)
+imageio_ffmpeg.get_ffmpeg_exe()
 
 summary = {
     "executable": sys.executable,
@@ -587,13 +608,10 @@ summary = {
     "pythonhome": os.environ.get("PYTHONHOME"),
     "virtual_env": os.environ.get("VIRTUAL_ENV"),
     "imageio": getattr(imageio, "__file__", None),
-    "openpi_client": importlib.util.find_spec("openpi_client") is not None,
-    "libero": importlib.util.find_spec("libero") is not None,
+    "openpi_client": websocket_client_policy.__file__,
+    "libero": get_libero_path("benchmark_root"),
 }
 print(json.dumps(summary, ensure_ascii=True))
-missing = [name for name in ("openpi_client", "libero") if not summary[name]]
-if missing:
-    raise SystemExit("Missing imports: " + ", ".join(missing))
 """
     result = subprocess.run(
         [args.client_python, "-c", check_script],
@@ -601,6 +619,7 @@ if missing:
         capture_output=True,
         text=True,
         check=False,
+        timeout=120,
     )
     if result.returncode != 0:
         stdout = result.stdout.strip()
@@ -718,6 +737,8 @@ def _build_client_cmd(args: Args, task: dict, port: int) -> tuple[list[str], pat
         cmd.extend(["--args.category", task["category"]])
     if args.task_ids:
         cmd.extend(["--args.task_ids", args.task_ids])
+    if args.resume:
+        cmd.append("--resume")
 
     return cmd, result_json
 
@@ -768,6 +789,7 @@ def run_worker_daemon(
             except Exception:
                 tail = "<tail failed>"
             print(f"[Worker GPU {gpu_id}:{port}] Server failed to become ready.\n{tail}")
+            _record_task_failure(f"server did not become ready; log={server_log_path}")
             return
 
         _mark_gpu_ready(gpu_id)
@@ -829,6 +851,7 @@ def run_worker_daemon(
 
     except Exception as exc:
         print(f"[Worker GPU {gpu_id}:{port}] Worker exception: {exc}")
+        _record_task_failure(f"worker GPU {gpu_id}:{port}: {exc}")
         if claimed_task:
             task_queue.task_done()
             pbar.update(1)
@@ -912,6 +935,26 @@ def _ensure_output_dir_unused(path: pathlib.Path) -> None:
         raise FileExistsError(f"Refusing to reuse non-empty evaluation output directory: {path}")
 
 
+def _evaluation_identity(args: Args) -> dict:
+    # Resource placement and timeouts may change on resume; the experiment may not.
+    fields = (
+        "checkpoint_dir", "policy_config", "task_suites", "categories", "task_ids",
+        "num_trials_per_task", "resize_size", "replan_steps", "libero_plus_path",
+        "results_base_dir", "video_base_dir",
+    )
+    identity = {name: getattr(args, name) for name in fields}
+    if not _is_remote_path(args.checkpoint_dir):
+        root = pathlib.Path(args.checkpoint_dir)
+        weights = root / "model.safetensors"
+        files = [weights] if weights.is_file() else [p for p in (root / "params").rglob("*") if p.is_file()]
+        files.extend((root / "assets").rglob("norm_stats.json"))
+        identity["checkpoint_files"] = {}
+        for path in sorted(files):
+            with path.open("rb") as stream:
+                identity["checkpoint_files"][str(path.relative_to(root))] = hashlib.file_digest(stream, "sha256").hexdigest()
+    return identity
+
+
 def _validate_args(args: Args) -> str:
     if not args.checkpoint_dir:
         raise ValueError(
@@ -927,6 +970,14 @@ def _validate_args(args: Args) -> str:
     if not _is_remote_path(checkpoint_dir):
         checkpoint_dir = str(_resolve_path(checkpoint_dir))
         args.checkpoint_dir = checkpoint_dir
+        checkpoint_path = pathlib.Path(checkpoint_dir)
+        if not (checkpoint_path / "model.safetensors").is_file() and not (checkpoint_path / "params").is_dir():
+            raise FileNotFoundError(f"No model.safetensors or JAX params found in {checkpoint_path}")
+        if next((checkpoint_path / "assets").rglob("norm_stats.json"), None) is None:
+            raise FileNotFoundError(f"Missing checkpoint assets/**/norm_stats.json in {checkpoint_path}")
+    tokenizer = os.environ.get("OPENPI_PALIGEMMA_TOKENIZER_PATH")
+    if tokenizer and not _is_remote_path(tokenizer) and not _resolve_path(tokenizer).is_file():
+        raise FileNotFoundError(f"Configured tokenizer does not exist: {tokenizer}")
 
     client_python = pathlib.Path(args.client_python)
     if not client_python.exists():
@@ -947,16 +998,32 @@ def _validate_args(args: Args) -> str:
         raise ValueError("max_workers_per_gpu must be >= 1")
     if args.estimated_worker_vram_gb <= 0:
         raise ValueError("estimated_worker_vram_gb must be > 0")
+    for name in ("num_trials_per_task", "replan_steps", "server_ready_timeout_sec", "client_timeout_sec"):
+        if getattr(args, name) <= 0:
+            raise ValueError(f"{name} must be > 0")
 
     output_dirs = (
         pathlib.Path(args.log_dir),
         pathlib.Path(args.results_base_dir),
         pathlib.Path(args.video_base_dir),
     )
-    for output_dir in output_dirs:
-        _ensure_output_dir_unused(output_dir)
+    manifest_path = pathlib.Path(args.results_base_dir) / "eval_manifest.json"
+    if not args.resume:
+        for output_dir in output_dirs:
+            _ensure_output_dir_unused(output_dir)
+    if args.resume and _is_remote_path(checkpoint_dir):
+        raise ValueError("Resume requires a local checkpoint so its weights and normalization can be verified.")
+    identity = _evaluation_identity(args)
+    if args.resume:
+        if not manifest_path.is_file():
+            raise FileNotFoundError("Cannot resume without eval_manifest.json; use a new output directory for legacy runs.")
+        if json.loads(manifest_path.read_text()) != identity:
+            raise ValueError("Resume checkpoint/protocol/output identity differs from eval_manifest.json.")
     for output_dir in output_dirs:
         output_dir.mkdir(parents=True, exist_ok=True)
+    if not args.resume:
+        with manifest_path.open("x", encoding="utf-8") as manifest_file:
+            json.dump(identity, manifest_file, indent=2)
 
     return checkpoint_dir
 
@@ -984,6 +1051,8 @@ def _parse_cli_args() -> Args:
 def main(args: Args) -> None:
     global current_port  # noqa: PLW0603
     checkpoint_dir = _validate_args(args)
+    if args.resume:
+        args.log_dir = str(pathlib.Path(args.log_dir) / f"resume_{time.time_ns()}")
     client_summary = _run_client_preflight(args, _build_client_env(args))
     gpu_ids = _discover_gpu_ids(args.gpu_ids)
     current_port = args.start_port
@@ -1026,7 +1095,10 @@ def main(args: Args) -> None:
 
         # Wait for all in-flight tasks to complete (or shutdown).
         if not shutdown_event.is_set():
-            task_queue.join()
+            # A worker may fail after this wait begins. Queue.join() cannot be
+            # interrupted by shutdown_event and would hang on unclaimed tasks.
+            while task_queue.unfinished_tasks and not shutdown_event.wait(0.2):
+                pass
 
     # Clean up any workers still alive (e.g. their server is still running
     # waiting to be torn down even though the queue is empty).

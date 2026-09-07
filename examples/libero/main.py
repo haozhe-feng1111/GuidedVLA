@@ -88,13 +88,8 @@ def _init_results_file(args: Args, selected: List[int]) -> pathlib.Path:
     now_iso = dt.datetime.now().isoformat()
     data: Dict[str, Any]
     if path.exists():
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            data = {}
-    else:
-        data = {}
+        raise FileExistsError(f"Results already exist: {path}; choose a new results path for this evaluation.")
+    data = {}
 
     data.setdefault("meta", {})
     meta = data["meta"]
@@ -143,17 +138,8 @@ def _record_episode_result(
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except Exception:
-        data = {
-            "meta": {},
-            "success": [],
-            "failure": [],
-            "running_counts": {
-                "total_episodes": 0,
-                "total_successes": 0,
-                "success_rate": 0.0,
-            },
-        }
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Cannot read existing results without losing evidence: {path}") from exc
 
     # Create episode record
     bucket = "success" if success else "failure"
@@ -235,117 +221,122 @@ def eval_libero(args: Args) -> None:
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
 
-        # Start episodes
-        task_episodes, task_successes = 0, 0
-        for episode_idx in tqdm.tqdm(range(args.num_trials_per_task)):
-            logging.info(f"\nTask: {task_description}")
+        try:
+            # Start episodes
+            task_episodes, task_successes = 0, 0
+            for episode_idx in tqdm.tqdm(range(args.num_trials_per_task)):
+                logging.info(f"\nTask: {task_description}")
 
-            # Reset environment
-            env.reset()
-            action_plan = collections.deque()
+                # Reset environment
+                env.reset()
+                action_plan = collections.deque()
 
-            # Set initial states
-            obs = env.set_init_state(initial_states[episode_idx])
+                # Set initial states
+                obs = env.set_init_state(initial_states[episode_idx])
 
-            # Setup
-            t = 0
-            replay_images = []
+                # Setup
+                t = 0
+                replay_images = []
+                done = False
+                last_error = None
 
-            logging.info(f"Starting episode {task_episodes+1}...")
-            while t < max_steps + args.num_steps_wait:
-                try:
-                    # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
-                    # and we need to wait for them to fall
-                    if t < args.num_steps_wait:
-                        obs, reward, done, info = env.step(LIBERO_DUMMY_ACTION)
+                logging.info(f"Starting episode {task_episodes+1}...")
+                while t < max_steps + args.num_steps_wait:
+                    try:
+                        # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
+                        # and we need to wait for them to fall
+                        if t < args.num_steps_wait:
+                            obs, reward, done, info = env.step(LIBERO_DUMMY_ACTION)
+                            t += 1
+                            continue
+
+                        # Get preprocessed image
+                        # IMPORTANT: rotate 180 degrees to match train preprocessing
+                        img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
+                        wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
+                        img = image_tools.convert_to_uint8(
+                            image_tools.resize_with_pad(img, args.resize_size, args.resize_size)
+                        )
+                        wrist_img = image_tools.convert_to_uint8(
+                            image_tools.resize_with_pad(wrist_img, args.resize_size, args.resize_size)
+                        )
+
+                        # Save preprocessed image for replay video
+                        replay_images.append(img)
+
+                        if not action_plan:
+                            # Finished executing previous action chunk -- compute new chunk
+                            # Prepare observations dict
+                            element = {
+                                "observation/image": img,
+                                "observation/wrist_image": wrist_img,
+                                "observation/state": np.concatenate(
+                                    (
+                                        obs["robot0_eef_pos"],
+                                        _quat2axisangle(obs["robot0_eef_quat"]),
+                                        obs["robot0_gripper_qpos"],
+                                    )
+                                ),
+                                "prompt": str(task_description),
+                            }
+
+                            # Query model to get action
+                            action_chunk = client.infer(element)["actions"]
+                            assert (
+                                len(action_chunk) >= args.replan_steps
+                            ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                            action_plan.extend(action_chunk[: args.replan_steps])
+
+                        action = action_plan.popleft()
+
+                        # Execute action in environment
+                        obs, reward, done, info = env.step(action.tolist())
+                        if done:
+                            task_successes += 1
+                            total_successes += 1
+                            break
                         t += 1
-                        continue
 
-                    # Get preprocessed image
-                    # IMPORTANT: rotate 180 degrees to match train preprocessing
-                    img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-                    wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
-                    img = image_tools.convert_to_uint8(
-                        image_tools.resize_with_pad(img, args.resize_size, args.resize_size)
-                    )
-                    wrist_img = image_tools.convert_to_uint8(
-                        image_tools.resize_with_pad(wrist_img, args.resize_size, args.resize_size)
-                    )
-
-                    # Save preprocessed image for replay video
-                    replay_images.append(img)
-
-                    if not action_plan:
-                        # Finished executing previous action chunk -- compute new chunk
-                        # Prepare observations dict
-                        element = {
-                            "observation/image": img,
-                            "observation/wrist_image": wrist_img,
-                            "observation/state": np.concatenate(
-                                (
-                                    obs["robot0_eef_pos"],
-                                    _quat2axisangle(obs["robot0_eef_quat"]),
-                                    obs["robot0_gripper_qpos"],
-                                )
-                            ),
-                            "prompt": str(task_description),
-                        }
-
-                        # Query model to get action
-                        action_chunk = client.infer(element)["actions"]
-                        assert (
-                            len(action_chunk) >= args.replan_steps
-                        ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
-                        action_plan.extend(action_chunk[: args.replan_steps])
-
-                    action = action_plan.popleft()
-
-                    # Execute action in environment
-                    obs, reward, done, info = env.step(action.tolist())
-                    if done:
-                        task_successes += 1
-                        total_successes += 1
+                    except Exception as e:
+                        last_error = f"{type(e).__name__}: {e}"
+                        logging.error(f"Caught exception: {e}")
                         break
-                    t += 1
 
-                except Exception as e:
-                    logging.error(f"Caught exception: {e}")
-                    break
+                task_episodes += 1
+                total_episodes += 1
 
-            task_episodes += 1
-            total_episodes += 1
+                # Save a replay video of the episode
+                suffix = "success" if done else "failure"
+                task_segment = task_description.replace(" ", "_")
+                video_path = pathlib.Path(args.video_out_path) / f"rollout_{args.task_suite_name}_task{task_id:03d}_{task_segment}_ep{episode_idx:02d}_{run_timestamp}_{suffix}.mp4"
+                if replay_images:
+                    imageio.mimwrite(video_path, [np.asarray(x) for x in replay_images], fps=10)
 
-            # Save a replay video of the episode
-            suffix = "success" if done else "failure"
-            task_segment = task_description.replace(" ", "_")
-            video_path = pathlib.Path(args.video_out_path) / f"rollout_{args.task_suite_name}_task{task_id:03d}_{task_segment}_ep{episode_idx:02d}_{run_timestamp}_{suffix}.mp4"
-            imageio.mimwrite(
-                video_path,
-                [np.asarray(x) for x in replay_images],
-                fps=10,
-            )
+                # Log current results
+                logging.info(f"Success: {done}")
+                logging.info(f"# episodes completed so far: {total_episodes}")
+                logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
 
-            # Log current results
-            logging.info(f"Success: {done}")
-            logging.info(f"# episodes completed so far: {total_episodes}")
-            logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
+                # Record episode result to JSON
+                _record_episode_result(
+                    args,
+                    task_id=task_id,
+                    task_description=task_description,
+                    episode_index=episode_idx,
+                    steps_taken=t,
+                    success=bool(done),
+                    video_path=video_path,
+                    error=last_error,
+                    extra={"max_steps": max_steps, "num_steps_wait": args.num_steps_wait},
+                )
+                if last_error:
+                    raise RuntimeError(f"Episode infrastructure failure: {last_error}")
 
-            # Record episode result to JSON
-            _record_episode_result(
-                args,
-                task_id=task_id,
-                task_description=task_description,
-                episode_index=episode_idx,
-                steps_taken=t,
-                success=bool(done),
-                video_path=video_path,
-                error=None,
-                extra={"max_steps": max_steps, "num_steps_wait": args.num_steps_wait},
-            )
-
-        # Log final results
-        logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
-        logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
+            # Log final results
+            logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
+            logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
+        finally:
+            env.close()
 
     logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
     logging.info(f"Total episodes: {total_episodes}")

@@ -84,7 +84,7 @@ Available `--category` values: `"Objects Layout"`, `"Camera Viewpoints"`, `"Robo
 
 Useful `main.py` arguments:
 - `--task-ids`: e.g. `0`, `0,3,7`, or `10-19`
-- `--replan-steps`: action chunk size requested from the server
+- `--replan-steps`: number of predicted actions executed before replanning; this does not change flow denoising iterations
 - `--results-json-path`: rolling JSON summary; when `--category` is set, the category suffix is appended automatically
 
 ### Step 3: Run all task suites and perturbations at once
@@ -103,6 +103,32 @@ Useful `eval_libero_plus.py` arguments:
 - `--categories`: comma-separated perturbation categories
 - `--task-ids`: restrict to a subset of tasks
 - `--num-trials-per-task`: number of rollouts per task
+
+### Startup failures and resuming
+
+The batch runner checks local weights, checkpoint normalization assets, an explicitly configured tokenizer,
+and simulator imports before dispatching workers. Server startup or episode infrastructure errors stop
+the run with a nonzero exit code; an unsuccessful but valid rollout remains a normal benchmark failure.
+The simulator imports LIBERO-Plus and `openpi-client` from the selected paths, without inheriting the
+server's `PYTHONPATH`. Install other client dependencies in `--client-python`'s environment.
+
+Use separate output directories for each experiment. To resume a run created by this version, repeat
+the batch command with `--resume true` and the same checkpoint, protocol, results and video directories.
+GPU placement, ports and timeouts may change. `eval_manifest.json` validates the configuration and SHA-256
+of local checkpoint weights and normalization files; hashing a large checkpoint takes additional time.
+Resume requires a local checkpoint. Older runs without a manifest must use new output directories;
+do not bypass the output guard. Standalone `main.py --resume` checks the saved client protocol, but
+cannot verify the remote policy checkpoint: use the batch runner for checkpoint-verified resumption.
+
+Completed episodes are identified by result JSON, not by an existing video. Infrastructure errors are
+retried and replace their prior episode record across success/failure buckets. Resume logs go into a
+new attempt subdirectory. An empty or incomplete result set does not count as a completed batch.
+
+CPU regression checks (no models, GPU or simulator required):
+
+```bash
+PYTHONPATH=packages/openpi-client/src:. python -m pytest -q examples/libero_plus
+```
 
 Outputs are written under:
 - `data/libero_plus/` for JSON results and rollout videos

@@ -63,6 +63,11 @@ uv run scripts/serve_policy.py --env LIBERO
 
 ## Results
 
+Use a new `--args.results-json-path` for each evaluation. Existing results are protected from
+accidental appends. Infrastructure exceptions are recorded in the JSON and terminate evaluation with
+a nonzero exit code; they must not be counted as ordinary model failures. Simulation environments are
+closed after every task, including when an episode or artifact write raises an exception.
+
 If you want to reproduce the following numbers, you can evaluate the checkpoint at `gs://openpi-assets/checkpoints/pi05_libero/`. This
 checkpoint was trained in openpi with the `pi05_libero` config.
 
