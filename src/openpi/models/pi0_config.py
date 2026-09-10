@@ -56,6 +56,10 @@ class Pi0Config(_model.BaseModelConfig):
     # Whether to add per-head sigmoid gate to the control branch Q projection.
     control_attention_use_headwise_gate: bool | None = None
 
+    # Keep image preprocessing fixed when ablating object/skill supervision.
+    # Default preserves the existing training augmentation policy.
+    disable_image_augmentation: bool = False
+
     # Object-mask supervision settings.
     use_object_loss: bool = False
     # Optional list/tuple of view names to supervise with object masks (H_object).

@@ -974,7 +974,9 @@ class PI0Pytorch(nn.Module):
         # geometric transforms are applied jointly to images and targets, keep
         # object-supervised batches unaugmented. Validation is always deterministic
         # with respect to image preprocessing through ``self.training``.
-        preprocess_for_training = self.training and not use_object_loss
+        preprocess_for_training = (
+            self.training and not use_object_loss and not self.config.disable_image_augmentation
+        )
         images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(
             observation, train=preprocess_for_training
         )
