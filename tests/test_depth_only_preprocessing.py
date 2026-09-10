@@ -1,5 +1,9 @@
 """Exercise the real forward preprocessing decision without loading model weights."""
 import ast
+import os
+import socket
+import subprocess
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -8,6 +12,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PreprocessingPolicyTest(unittest.TestCase):
+    def test_launcher_temp_socket_with_long_asset_root(self):
+        # Exercise the real shell assignments, stopping before any preflight/write.
+        launcher = ROOT / "manifests/train_libero_stage2_depth_only_b24_4gpu.sh"
+        prefix = launcher.read_text().split("TRAIN_CMD=(", 1)[0]
+        env = dict(os.environ, GUIDEDVLA_BASE="/tmp/" + "long-asset-root-" * 12)
+        env.pop("GUIDEDVLA_TMP_ROOT", None)
+        tmp = Path(subprocess.check_output(
+            ["bash", "-c", prefix + '\nprintf "%s" "$TMP_ROOT"'],
+            cwd=ROOT, env=env, text=True,
+        ))
+        # A long BASE/RUN_ID must not leak into the multiprocessing socket path.
+        self.assertLess(len(str(tmp).encode()), 60)
+        tmp.mkdir(mode=0o700)
+        try:
+            with tempfile.TemporaryDirectory(prefix="pymp-", dir=tmp) as child:
+                with socket.socket(socket.AF_UNIX) as sock:
+                    sock.bind(str(Path(child) / "listener-12345678"))
+        finally:
+            tmp.rmdir()
+
     def test_training_and_validation_policy(self):
         tree = ast.parse((ROOT / "src/openpi/models_pytorch/pi0_pytorch.py").read_text())
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "PI0Pytorch")

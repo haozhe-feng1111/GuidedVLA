@@ -21,4 +21,4 @@ jobs:
       - name: Test evaluation orchestration and result handling without models or simulators
         env:
           PYTHONPATH: packages/openpi-client/src:.
-        run: python -m pytest -q examples/libero_plus
+        run: python -m pytest -q examples/libero_plus tests/test_depth_only_preprocessing.py

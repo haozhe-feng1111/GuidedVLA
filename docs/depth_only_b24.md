@@ -29,9 +29,8 @@ consequence of the ablation. No claim of identical random draws is made.
 
 This launcher is based on main `efde8e0450bf239d82df54dd5dbed338eb6b6d2e` and the
 existing depth launcher, with B24/GA1 matching the recorded Depth B24 recipe.
-Historical checkpoint identity and the full resolved configuration must still be
-compared on the target runtime before a formal run; no training or GPU smoke has
-been performed for this candidate.
+Historical reference-arm identity and the full resolved configuration must still
+be compared before a formal run. See the bounded smoke validation below.
 
 ## Review and launch
 
@@ -59,3 +58,25 @@ budget, retries and numerical success thresholds are not yet approved. First
 validate initialization and effective configuration, then obtain approval before
 formal training. Preserve launch metadata, resolved config, loss logs and final
 checkpoint identity. Stop on configuration mismatch or invalid initialization.
+
+## Bounded smoke validation (2026-09-10)
+
+Four GPUs, B24/GA1, three optimizer steps and one validation batch completed with
+exit code 0 after fixing the launcher temporary path. The first attempt failed
+before training with `AF_UNIX path too long`: appending the run ID to the asset
+root made multiprocessing forkserver socket paths too long. The default now uses
+a short per-process `/tmp/gvla-UID-PID` directory; `GUIDEDVLA_TMP_ROOT` can override
+it with a short path. Existing results were preserved, and the retry reused only
+the completed data cache.
+
+The successful run used the published model implementation and a smoke copy of
+the launcher (3 steps, log interval 1, save/validation interval 3, independent run
+ID, short TMPDIR). Train losses were approximately 0.0027, 0.0036, 0.0094; validation
+loss was 0.00399. Checkpoint metadata confirms global batch 24, accumulation 1,
+object/skill disabled, depth enabled, augmentation disabled, heads 4/5 and layers
+9–12. This verifies initialization, forward/backward, optimizer updates, validation
+and checkpoint writing, not convergence, checkpoint reload or benchmark quality.
+
+CPU regression tests cover the real forward preprocessing policy and creation of
+a multiprocessing-style Unix socket with a long asset-root path. Both default
+pytest discovery and the push-triggered CPU workflow now include these tests.

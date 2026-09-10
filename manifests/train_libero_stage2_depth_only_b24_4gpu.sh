@@ -30,7 +30,8 @@ OUTPUT_ROOT="${BASE}/outputs/${RUN_ID}"
 LOG_ROOT="${BASE}/logs/${RUN_ID}"
 WANDB_ROOT="${BASE}/wandb/${RUN_ID}"
 CACHE_ROOT="${BASE}/cache/${RUN_ID}"
-TMP_ROOT="${BASE}/tmp/${RUN_ID}"
+# multiprocessing forkserver appends a socket filename; keep TMPDIR short.
+TMP_ROOT="${GUIDEDVLA_TMP_ROOT:-/tmp/gvla-${UID}-$$}"
 STATS_ROOT="${NORM_STATS_SOURCE:-${ASSETS_ROOT}/pi0_libero_object_depth_skill}"
 
 export HF_HOME="${CACHE_ROOT}/hf"
