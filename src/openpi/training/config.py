@@ -1024,6 +1024,46 @@ _CONFIGS = [
         num_train_steps=30_000,
     ),
     TrainConfig(
+        # Frozen Wan2.2 TI2V-5B VAE posterior-mean features. The same final
+        # 16x16 native 48-d token grid feeds four independent deep-layer K/V
+        # projectors; no external width adapter is used.
+        name="pi0_libero_wan22_vae_only_b24",
+        model=pi0_config.Pi0Config(
+            guided_layer_indices=[9, 10, 11, 12],
+            depth_guided_layer_indices=[9, 10, 11, 12],
+            disable_image_augmentation=True,
+            control_attention_enabled=True,
+            control_attention_num_heads=8,
+            use_object_loss=False,
+            object_head_indices=[0, 1],
+            object_use_control=False,
+            use_wan22_encoder=True,
+            wan22_source_root="path/to/Wan2.2",
+            wan22_checkpoint_path="path/to/Wan2.2-TI2V-5B/Wan2.2_VAE.pth",
+            wan22_dtype="bfloat16",
+            wan22_head_indices=[4, 5],
+            wan22_use_control=True,
+            use_skill_loss=False,
+            skill_num_classes=4,
+            skill_head_indices=[6, 7],
+            skill_use_control=False,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="ybwowen/libero",
+            base_config=DataConfig(prompt_from_task=True, use_object_loss=False, use_skill_loss=False),
+            extra_delta_transform=True,
+        ),
+        pytorch_training_precision="float32",
+        object_loss_weight=0.0,
+        skill_loss_weight=0.0,
+        use_gradient_checkpointing=True,
+        gradient_accumulation_steps=1,
+        batch_size=24,
+        num_workers=2,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=30_000,
+    ),
+    TrainConfig(
         # Frozen torchvision RAFT-Large C_T_SKHT_V2 fnet features from one
         # current frame. The final stride-8 map is bilinearly resized to 16x16
         # and feeds four independent native-width K/V projectors.
